@@ -19,6 +19,12 @@ Rapporten en screenshots staan per test in `runs/<id>/`. Het JSON-rapport bevat 
 
 Plak een publieke HTTP(S)-URL waarvoor je toestemming hebt en klik op **Start websitetest**. Browser Agent controleert de HTTP-respons, paginatitel en zichtbare inhoud. Met **Te controleren tekst** voeg je een controle op zichtbare of afwezige tekst toe. Deze modus heeft geen API-sleutel of testopdracht nodig. De preview toont opnamen van de pagina zoals die voor een nieuwe bezoeker wordt geladen.
 
+### Passieve beveiligingscontrole
+
+Vink **Passieve beveiligingscontrole** aan om de uiteindelijke documentrespons ook te beoordelen op HTTPS, HSTS, CSP, `nosniff`, cookie-attributen en software-informatie in responseheaders. De controle gebruikt de bestaande paginalaadactie. Onder **Beveiligingscontrole** en in het JSON-rapport staat per waarneming het bewijs, eventueel hersteladvies en de toepasselijke verwijzing naar [OWASP ASVS 5.0.0](https://github.com/OWASP/ASVS/releases/tag/v5.0.0).
+
+Een melding **Te beoordelen** beschrijft een configuratiesignaal in de bemonsterde respons. Cookie-attributen worden geanalyseerd zonder cookie-namen of -waarden op te slaan. Een volledige TLS-configuratiecontrole, een dependency-audit en actieve tests vragen aparte gegevens en testopzet.
+
 ## AI-modus voor een eigen testsite
 
 Stel voor een testomgeving met fictieve gegevens de volgende variabelen in voordat je de server start.

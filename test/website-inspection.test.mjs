@@ -25,10 +25,30 @@ function waitForReport(page) {
 }
 
 test('website inspection works without a model or task and rejects unconfigured private targets', async t => {
+  const securityRequests = [];
   const website = await serve(t, (request, response) => {
+    if (request.url === '/beveiliging-buiten-scope') {
+      response.writeHead(302, { Location: '/beveiliging-doorsturen' });
+      return response.end();
+    }
+    if (request.url === '/beveiliging-doorsturen') {
+      response.writeHead(302, { Location: privateWebsite });
+      return response.end();
+    }
+    if (request.url === '/beveiliging-start') {
+      securityRequests.push(`${request.method} ${request.url}`);
+      response.writeHead(302, { Location: '/beveiliging?probe=privaat', 'X-Powered-By': 'redirect-banner' });
+      return response.end();
+    }
     const missing = request.url === '/ontbreekt';
     const title = missing ? 'Pagina ontbreekt' : 'Testwinkel';
-    response.writeHead(missing ? 404 : 200, { 'Content-Type': 'text/html; charset=utf-8' });
+    const headers = { 'Content-Type': 'text/html; charset=utf-8' };
+    if (request.url.startsWith('/beveiliging?')) {
+      securityRequests.push(`${request.method} ${request.url}`);
+      headers['X-Content-Type-Options'] = 'nosniff';
+      headers['Set-Cookie'] = ['test-secret-name=private-cookie-value; HttpOnly; SameSite=Lax'];
+    }
+    response.writeHead(missing ? 404 : 200, headers);
     response.end(`<!doctype html><html lang="nl"><head><meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head>
       <body><main><h1>${title}</h1>${missing ? '' : '<p>Welkom in de testwinkel</p>'}</main></body></html>`);
@@ -71,7 +91,7 @@ test('website inspection works without a model or task and rejects unconfigured 
   await targetUrl.fill(website);
   await page.getByLabel('Testopdracht').waitFor({ state: 'hidden' });
   await expectedText.fill('Welkom in de testwinkel');
-  await page.getByRole('checkbox').check();
+  await page.getByRole('checkbox', { name: 'Ik heb toestemming om deze website te testen.' }).check();
   const [request, response] = await Promise.all([
     page.waitForRequest(candidate => candidate.method() === 'POST' && candidate.url() === `${origin}/api/runs`),
     waitForReport(page),
@@ -82,6 +102,7 @@ test('website inspection works without a model or task and rejects unconfigured 
   assert.equal(report.mode, 'inspection');
   assert.equal(report.status, 'completed');
   assert.equal(report.coverage, 'full');
+  assert.equal(report.security, undefined);
   const check = report.steps.find(step => step.check?.value === 'Welkom in de testwinkel');
   assert.equal(check?.status, 'passed');
   assert.equal(check.actual, true);
@@ -101,6 +122,39 @@ test('website inspection works without a model or task and rejects unconfigured 
   assert.equal(exported.mode, 'inspection');
   assert.equal(exported.steps.find(step => step.id === check.id).screenshot, new URL(check.screenshot, origin).href);
 
+  await targetUrl.fill(`${website}/beveiliging-start`);
+  const securityOption = page.getByRole('checkbox', { name: 'Passieve beveiligingscontrole' });
+  await securityOption.check();
+  const [securityResponse] = await Promise.all([waitForReport(page), startWebsite.click()]);
+  const securityRun = await securityResponse.json();
+  assert.deepEqual(securityRequests, ['GET /beveiliging-start', 'GET /beveiliging?probe=privaat']);
+  assert.equal(securityRun.status, 'completed');
+  assert.equal(securityRun.securityRequested, true);
+  const security = securityRun.security;
+  assert.equal(security.mode, 'passive');
+  assert.deepEqual(security.document, {
+    url: `${website}/beveiliging`, httpStatus: 200, evidenceStepId: securityRun.steps[0].id,
+  });
+  assert.equal(security.checks.find(check => check.id === 'nosniff').status, 'observed');
+  assert.equal(security.checks.find(check => check.id === 'cookie-httponly').status, 'observed');
+  assert.equal(security.checks.find(check => check.id === 'banner').status, 'observed');
+  assert.doesNotMatch(JSON.stringify(securityRun), /test-secret-name|private-cookie-value/);
+  await page.getByRole('heading', { name: 'Beveiligingscontrole', exact: true }).waitFor();
+  await page.getByText('Bekijk beveiligingscontroles', { exact: true }).click();
+  await page.getByText('X-Content-Type-Options: nosniff waargenomen.', { exact: true }).waitFor();
+  assert.ok(await page.getByRole('link', { name: /ASVS v5.0.0-3.4.4/ }).getAttribute('href'));
+  const persisted = JSON.parse(await readFile(new URL(`../runs/${securityRun.id}/report.json`, import.meta.url), 'utf8'));
+  assert.deepEqual(persisted.security, security);
+
+  await targetUrl.fill(`${website}/beveiliging-buiten-scope`);
+  const [blockedResponse] = await Promise.all([waitForReport(page), startWebsite.click()]);
+  const blockedRun = await blockedResponse.json();
+  assert.equal(blockedRun.status, 'error');
+  assert.equal(blockedRun.security.document, null);
+  assert.ok(blockedRun.security.checks.every(check => check.status === 'not_observed'));
+  assert.equal(privateRequests, 0);
+
+  await securityOption.uncheck();
   await targetUrl.fill(`${website}/ontbreekt`);
   await expectedText.clear();
   const [notFoundResponse] = await Promise.all([waitForReport(page), startWebsite.click()]);
@@ -109,4 +163,5 @@ test('website inspection works without a model or task and rejects unconfigured 
   assert.equal(notFound.coverage, 'partial');
   assert.ok(notFound.steps.some(step => step.status === 'failed' && /404/.test(step.detail)));
   await page.getByText('Website · Fout gevonden · Dekking gedeeltelijk', { exact: true }).waitFor();
+  await page.getByRole('heading', { name: 'Beveiligingscontrole', exact: true }).waitFor({ state: 'hidden' });
 });

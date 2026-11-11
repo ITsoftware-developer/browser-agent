@@ -89,6 +89,10 @@ test('transport pins checked addresses while retaining hostname and applies the 
   });
   const response = await fetchPublic('https://site.example/page', {
     headers: { Accept: 'text/html', Cookie: 'secret', Authorization: 'secret', Host: '127.0.0.1' },
+    onHeaders: (status, headers) => {
+      assert.equal(status, 302);
+      assert.deepEqual(headers['set-cookie'], ['test=1']);
+    },
   });
   assert.equal(lookups, 1);
   assert.equal(requests, 1);

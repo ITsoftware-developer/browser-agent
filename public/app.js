@@ -6,6 +6,13 @@ const inspectionNote = document.querySelector('#inspection-note');
 const expectation = document.querySelector('#expectation');
 const expectationText = document.querySelector('#expectation-text');
 const expectationVisibility = document.querySelector('#expectation-visibility');
+const securityOption = document.querySelector('#security-option');
+const securityEnabled = document.querySelector('#security-enabled');
+const securityPanel = document.querySelector('#security-report');
+const securityStatus = document.querySelector('#security-status');
+const securityCount = document.querySelector('#security-count');
+const securityDetails = document.querySelector('#security-details');
+const securityChecks = document.querySelector('#security-checks');
 const authorized = document.querySelector('#authorized');
 const start = document.querySelector('#start');
 const startLabel = document.querySelector('#start-label');
@@ -58,6 +65,7 @@ function isDemoTarget(target) {
 
 function targetMode(target) {
   if (isDemoTarget(target)) return 'demo';
+  if (securityEnabled.checked) return 'inspection';
   return aiOrigins.has(target?.origin) ? 'ai' : 'inspection';
 }
 
@@ -78,6 +86,8 @@ function updateTargetFields() {
   startLabel.textContent = startLabels[mode];
   expectation.hidden = !showExpectation;
   expectation.disabled = !showExpectation;
+  securityOption.hidden = !showExpectation;
+  securityEnabled.disabled = !showExpectation;
 }
 
 function markPreset(scenario) {
@@ -94,6 +104,7 @@ url.addEventListener('input', () => {
   const preset = presets.find(button => url.value === `${location.origin}/demo?scenario=${button.dataset.demo}`);
   markPreset(preset?.dataset.demo);
 });
+securityEnabled.addEventListener('change', updateTargetFields);
 selectDemo('bug');
 const capabilities = request('/api/capabilities').then(data => {
   aiOrigins = new Set(data.aiOrigins);
@@ -247,6 +258,61 @@ followLatest.addEventListener('click', () => {
   renderPreview();
 });
 
+const securityLabels = { observed: 'Waargenomen', review: 'Te beoordelen', not_observed: 'Niet waargenomen' };
+const securitySeverity = { info: 'Informatief', low: 'Laag', medium: 'Middel' };
+
+function renderSecurity(run) {
+  securityPanel.hidden = !run.securityRequested;
+  if (securityPanel.hidden) return;
+  if (securityPanel.dataset.run !== run.id) {
+    securityPanel.dataset.run = run.id;
+    securityPanel.dataset.state = '';
+    securityDetails.open = false;
+  }
+  const state = run.security ? 'ready' : run.status === 'running' ? 'loading' : 'unavailable';
+  if (securityPanel.dataset.state === state) return;
+  securityPanel.dataset.state = state;
+  securityChecks.replaceChildren();
+  securityDetails.hidden = state !== 'ready';
+  securityCount.hidden = state !== 'ready';
+  if (state !== 'ready') {
+    securityStatus.textContent = state === 'loading' ? 'Wachten op de documentrespons…' : 'Documentrespons niet beschikbaar.';
+    return;
+  }
+  const { document: source, standard, checks } = run.security;
+  securityStatus.textContent = source
+    ? `${standard} · Documentrespons HTTP ${source.httpStatus} · ${source.url}. De resultaten gelden voor deze respons.`
+    : `${standard} · Documentrespons niet beschikbaar.`;
+  const pending = checks.filter(check => check.status === 'review').length;
+  securityCount.dataset.state = pending ? 'review' : 'observed';
+  securityCount.textContent = `${pending} te beoordelen`;
+  for (const check of checks) {
+    const item = document.createElement('li');
+    const title = document.createElement('h3');
+    title.textContent = check.title;
+    const badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.dataset.state = check.status;
+    badge.textContent = check.status === 'review'
+      ? `${securityLabels.review} · ${securitySeverity[check.severity]}`
+      : securityLabels[check.status];
+    const evidence = document.createElement('p');
+    evidence.textContent = check.evidence;
+    item.append(title, badge, evidence);
+    if (check.advice) {
+      const advice = document.createElement('p');
+      advice.textContent = check.advice;
+      item.append(advice);
+    }
+    for (const reference of check.asvs ?? []) {
+      if (reference.url.startsWith('https://github.com/OWASP/ASVS/blob/v5.0.0/')) {
+        item.append(screenshotLink(reference.url, `ASVS ${reference.id} ↗`));
+      }
+    }
+    securityChecks.append(item);
+  }
+}
+
 function render(run) {
   if (latestRun?.id !== run.id) {
     steps.replaceChildren();
@@ -262,6 +328,7 @@ function render(run) {
   summary.hidden = !description;
   summary.textContent = description;
   renderCounts(run);
+  renderSecurity(run);
   download.hidden = run.status === 'running';
   for (const step of run.steps.slice(steps.children.length)) {
     const index = steps.children.length;
@@ -331,6 +398,7 @@ form.addEventListener('submit', async event => {
     if (url.value !== submittedUrl || !form.reportValidity()) return;
     const mode = targetMode(targetUrl());
     const input = { url: submittedUrl, authorized: authorized.checked };
+    if (securityEnabled.checked && !securityEnabled.disabled) input.security = true;
     if (mode !== 'inspection') input.task = task.value;
     const value = expectationText.value.trim();
     if (value && !expectation.disabled) {

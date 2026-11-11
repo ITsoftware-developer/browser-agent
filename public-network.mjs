@@ -146,7 +146,7 @@ function requestDirect(url, options, callback) {
 export function createPublicFetcher({
   lookup = lookupDns, request = requestDirect, timeoutMs = 10000, maxBytes = 8 * 1024 * 1024,
 } = {}) {
-  return async (input, { method = 'GET', headers = {} } = {}) => {
+  return async (input, { method = 'GET', headers = {}, onHeaders } = {}) => {
     if (!isPublicUrl(input)) throw publicAddressRequired();
     if (!['GET', 'HEAD'].includes(method)) {
       throw networkError('PUBLIC_METHOD_NOT_ALLOWED', 'Alleen GET- en HEAD-verzoeken zijn toegestaan.');
@@ -169,7 +169,16 @@ export function createPublicFetcher({
             if (options.all) return callback(null, addresses);
             callback(null, addresses[0].address, addresses[0].family);
           },
-        }, result => collectResponse(result, method, maxBytes).then(resolve, reject));
+        }, result => {
+          try {
+            onHeaders?.(result.statusCode, result.headers);
+          } catch (error) {
+            result.destroy();
+            reject(error);
+            return;
+          }
+          collectResponse(result, method, maxBytes).then(resolve, reject);
+        });
         client.on('error', reject);
         client.end();
       });

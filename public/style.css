@@ -134,6 +134,22 @@ dialog::backdrop { background: #10121acc; }
 #steps details { margin-top: 8px; font-size: .85rem; }
 #steps summary { cursor: pointer; }
 
+.security-report { margin-bottom: 16px; }
+#security-status { margin: 8px 0; overflow-wrap: anywhere; }
+#security-details summary { cursor: pointer; font-weight: 600; }
+#security-checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+#security-checks li { padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: #161b26; }
+#security-checks h3 { margin: 0 0 6px; font-size: .95rem; }
+#security-checks p { margin: 8px 0; font-size: .85rem; }
+#security-checks a { color: var(--accent); font-size: .82rem; }
+
 @media (min-width: 1161px) {
   .dashboard .preview { position: sticky; top: 16px; }
 }

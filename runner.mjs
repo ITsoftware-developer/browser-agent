@@ -4,6 +4,7 @@ import { chromium, errors as playwrightErrors } from 'playwright';
 import { parseAgentAction } from './agent-actions.mjs';
 import { checkKey } from './run-status.mjs';
 import { createPublicFetcher, isPublicUrl } from './public-network.mjs';
+import { buildSecurityReport, observeSecurityResponse } from './security-checks.mjs';
 
 export class AgentError extends Error {
   constructor(code, message, options) {
@@ -23,6 +24,12 @@ function stepFailure(error) {
 function errorResult(error) {
   const diagnostic = error.cause?.message?.split('\n', 1)[0].slice(0, 350);
   return { status: 'error', errorCode: error.code, detail: error.message, diagnostic };
+}
+
+function documentAddress(value) {
+  const url = new URL(value);
+  url.hash = '';
+  return url.href;
 }
 
 async function withBrowser({ target, directory, run, publicInspection = false }, test) {
@@ -50,6 +57,8 @@ async function withBrowser({ target, directory, run, publicInspection = false },
     let publicBytes = 0;
     let activeStep;
     let lastInteraction;
+    let documentObservation;
+    let initialNavigation;
     const page = await context.newPage();
     page.on('framenavigated', frame => {
       if (frame === page.mainFrame()) lastInteraction = undefined;
@@ -71,6 +80,18 @@ async function withBrowser({ target, directory, run, publicInspection = false },
       const requestStep = activeStep;
       const info = { origin: url.origin, path: url.pathname.slice(0, 160),
         method: request.method(), resourceType: request.resourceType() };
+      const navigation = initialNavigation;
+      const initialDocument = navigation && request.isNavigationRequest() &&
+        navigation.address === documentAddress(url);
+      let observeHeaders;
+      if (run.securityRequested && initialDocument) {
+        observeHeaders = (status, headers, setCookies = headers['set-cookie']) => {
+          documentObservation = {
+            requestUrl: documentAddress(url),
+            observation: observeSecurityResponse({ url, status, headers, setCookies }),
+          };
+        };
+      }
       const inScope = fetchPublic ? isPublicUrl(url) : url.origin === target.origin &&
         (run.mode !== 'demo' || ['/demo', '/demo.js', '/style.css'].includes(url.pathname));
       const allowedMethod = ['GET', 'HEAD'].includes(info.method);
@@ -98,7 +119,7 @@ async function withBrowser({ target, directory, run, publicInspection = false },
       try {
         let forwarded;
         if (fetchPublic) {
-          forwarded = await fetchPublic(url, { method: info.method, headers: await request.allHeaders() });
+          forwarded = await fetchPublic(url, { method: info.method, headers: await request.allHeaders(), onHeaders: observeHeaders });
           publicBytes += forwarded.body.length;
           if (publicBytes > 64 * 1024 * 1024) {
             reportNetworkIssue({ ...info, reason: 'limit' }, 'De laadlimiet voor deze pagina is bereikt.', requestStep);
@@ -106,14 +127,24 @@ async function withBrowser({ target, directory, run, publicInspection = false },
           }
         } else {
           response = await route.fetch({ maxRedirects: 0, maxRetries: 0, timeout: 8000 });
+          if (observeHeaders) {
+            const cookies = response.headersArray()
+              .filter(header => header.name.toLowerCase() === 'set-cookie').map(header => header.value);
+            observeHeaders(response.status(), response.headers(), cookies);
+          }
         }
         const status = forwarded?.status ?? response.status();
         const location = (forwarded?.headers ?? response.headers()).location;
         if (status >= 300 && status < 400 && location) {
           const next = new URL(location, url);
-          if (fetchPublic ? !isPublicUrl(next) : next.origin !== target.origin) {
+          if (next.username || next.password || (fetchPublic ? !isPublicUrl(next) : next.origin !== target.origin)) {
             reportNetworkIssue({ ...info, reason: 'redirect' }, `Doorverwijzing vanaf ${info.path} geblokkeerd.`, requestStep);
             return await route.abort();
+          }
+          if (initialDocument && [301, 302, 303, 307, 308].includes(status)) {
+            // Issue the next document navigation through the same guarded route.
+            navigation.redirect = next;
+            return await route.fulfill({ status: 204 });
           }
         }
         await route.fulfill(forwarded ?? { response });
@@ -195,22 +226,46 @@ async function withBrowser({ target, directory, run, publicInspection = false },
       }
       return step;
     };
+    const openDocument = async () => {
+      const deadline = performance.now() + (publicInspection ? 18000 : 12000);
+      let next = target;
+      for (let hop = 0; hop <= 10; hop++) {
+        const timeout = Math.max(1, Math.ceil(deadline - performance.now()));
+        const navigation = { address: documentAddress(next) };
+        initialNavigation = navigation;
+        let response;
+        try {
+          response = await page.goto(next.href, { waitUntil: 'domcontentloaded', timeout });
+        } catch (error) {
+          if (!navigation.redirect) throw error;
+        } finally {
+          initialNavigation = undefined;
+        }
+        if (!navigation.redirect) return response;
+        next = navigation.redirect;
+      }
+      throw new AgentError('navigation_failed', 'De website geeft te veel doorverwijzingen.');
+    };
     try {
+      let finalObservation;
       const navigation = await record('Website openen', async () => {
         let response;
         try {
-          response = await page.goto(target.href, {
-            waitUntil: 'domcontentloaded',
-            timeout: publicInspection ? 18000 : 12000,
-          });
+          response = await openDocument();
         } catch (error) {
+          if (error instanceof AgentError) throw error;
           throw new AgentError('navigation_failed', 'De startpagina kon niet worden geopend.', { cause: error });
+        }
+        if (response && documentObservation && response.status() === documentObservation.observation.httpStatus &&
+          documentAddress(response.url()) === documentObservation.requestUrl) {
+          finalObservation = documentObservation.observation;
         }
         const detail = `HTTP ${response?.status() ?? 'onbekend'}`;
         if (response?.ok()) return { status: 'passed', detail };
         if (run.mode !== 'ai') return { status: 'failed', detail };
         throw new AgentError('navigation_failed', detail);
       });
+      if (run.securityRequested) run.security = buildSecurityReport(finalObservation, navigation.id);
       if (navigation.status === 'passed') {
         await test({ page, record, errors, networkIssues });
       } else {
@@ -225,6 +280,7 @@ async function withBrowser({ target, directory, run, publicInspection = false },
       }
       throw failure;
     } finally {
+      if (run.securityRequested) run.security ??= buildSecurityReport(null);
       if (errors.length) {
         await record('Browserfouten', () => ({
           status: 'error',

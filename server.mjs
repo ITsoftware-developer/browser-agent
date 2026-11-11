@@ -6,6 +6,7 @@ import { AgentError, runDemo, runAgent, runInspection } from './runner.mjs';
 import { parseExpectations } from './agent-actions.mjs';
 import { getRunOutcome } from './run-status.mjs';
 import { isPublicUrl } from './public-network.mjs';
+import { buildSecurityReport } from './security-checks.mjs';
 
 const port = Number(process.env.PORT || 4317);
 let base = `http://127.0.0.1:${port}`;
@@ -71,7 +72,8 @@ async function start(request, response) {
     return json(response, 400, { error: 'Voer een geldige website-URL in met http:// of https://.' });
   }
   const demo = target.origin === base && target.pathname === '/demo';
-  const mode = demo ? 'demo' : aiOrigins.includes(target.origin) ? 'ai' : 'inspection';
+  const securityRequested = !demo && input.security === true;
+  const mode = demo ? 'demo' : !securityRequested && aiOrigins.includes(target.origin) ? 'ai' : 'inspection';
   const publicInspection = mode === 'inspection' && !allowedOrigins.has(target.origin);
   if (publicInspection && !isPublicUrl(target)) {
     return json(response, 400, { error: 'Gebruik een publieke website-URL. Een lokale testsite kun je instellen via TEST_ORIGINS.' });
@@ -90,6 +92,7 @@ async function start(request, response) {
   const id = randomUUID();
   const directory = new URL(`runs/${id}/`, import.meta.url);
   const run = { id, url: target.href, task: mode === 'inspection' ? 'Automatische websitecontrole' : task, mode, status: 'running', steps: [] };
+  if (securityRequested) run.securityRequested = true;
   if (!demo && expectations.length) run.expectations = expectations;
   activeRun = run;
   json(response, 202, run);
@@ -117,6 +120,7 @@ async function start(request, response) {
     if (!error.stepId) appendRunError(run, run.errorCode, run.summary);
     outcome = getRunOutcome({ ...run, status: 'error' });
   }
+  if (run.securityRequested) run.security ??= buildSecurityReport(null);
   try {
     await writeFile(new URL('report.json', directory), JSON.stringify({ ...run, ...outcome }, null, 2));
   } catch (error) {

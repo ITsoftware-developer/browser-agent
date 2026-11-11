@@ -28,6 +28,17 @@
         <dd id="finding-count">0</dd>
       </div>
     </dl>
+    <section id="security-report" class="panel security-report" aria-labelledby="security-heading" hidden>
+      <div class="panel-heading">
+        <h2 id="security-heading">Beveiligingscontrole</h2>
+        <span id="security-count" class="badge" data-state="review" hidden></span>
+      </div>
+      <p id="security-status" role="status"></p>
+      <details id="security-details" hidden>
+        <summary>Bekijk beveiligingscontroles</summary>
+        <ul id="security-checks"></ul>
+      </details>
+    </section>
     <div class="layout">
       <section class="panel settings" aria-labelledby="settings-heading">
         <h2 id="settings-heading">Nieuwe test</h2>
@@ -53,6 +64,9 @@
               <option value="hidden">Niet zichtbaar</option>
             </select>
           </fieldset>
+          <label id="security-option" class="check" hidden>
+            <input id="security-enabled" type="checkbox" disabled> Passieve beveiligingscontrole
+          </label>
           <label class="check"><input id="authorized" type="checkbox" required> Ik heb toestemming om deze website te testen.</label>
           <button class="primary" id="start"><span id="start-label">Start demotest</span> <span aria-hidden="true">→</span></button>
           <p id="error" role="alert" hidden></p>
