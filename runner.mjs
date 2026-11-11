@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks';
 import { chromium, errors as playwrightErrors } from 'playwright';
 import { parseAgentAction } from './agent-actions.mjs';
 import { checkKey } from './run-status.mjs';
+import { createPublicFetcher, isPublicUrl } from './public-network.mjs';
 
 export class AgentError extends Error {
   constructor(code, message, options) {
@@ -24,10 +25,18 @@ function errorResult(error) {
   return { status: 'error', errorCode: error.code, detail: error.message, diagnostic };
 }
 
-async function withBrowser({ target, directory, run }, test) {
+async function withBrowser({ target, directory, run, publicInspection = false }, test) {
+  const fetchPublic = publicInspection ? createPublicFetcher() : null;
   const browser = await chromium.launch({
     channel: process.env.BROWSER_CHANNEL || 'msedge',
     headless: true,
+    // The browser receives routed responses. Other browser traffic has no direct connection.
+    proxy: publicInspection ? { server: 'http://127.0.0.1:1', bypass: '<-loopback>' } : undefined,
+    args: publicInspection ? [
+      '--disable-quic',
+      '--dns-prefetch-disable',
+      '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+    ] : undefined,
   });
   try {
     const context = await browser.newContext({
@@ -36,6 +45,9 @@ async function withBrowser({ target, directory, run }, test) {
       acceptDownloads: false,
     });
     const networkIssues = [];
+    let publicRequestCount = 0;
+    let publicInFlight = 0;
+    let publicBytes = 0;
     let activeStep;
     let lastInteraction;
     const page = await context.newPage();
@@ -59,8 +71,8 @@ async function withBrowser({ target, directory, run }, test) {
       const requestStep = activeStep;
       const info = { origin: url.origin, path: url.pathname.slice(0, 160),
         method: request.method(), resourceType: request.resourceType() };
-      const inScope = url.origin === target.origin && (!run.mode.startsWith('demo') ||
-        ['/demo', '/demo.js', '/style.css'].includes(url.pathname));
+      const inScope = fetchPublic ? isPublicUrl(url) : url.origin === target.origin &&
+        (run.mode !== 'demo' || ['/demo', '/demo.js', '/style.css'].includes(url.pathname));
       const allowedMethod = ['GET', 'HEAD'].includes(info.method);
       if (!inScope || !allowedMethod) {
         const issue = reportNetworkIssue({ ...info, reason: inScope ? 'method' : 'scope' },
@@ -76,21 +88,43 @@ async function withBrowser({ target, directory, run }, test) {
         }
         return route.abort();
       }
+      if (fetchPublic && (++publicRequestCount > 180 || publicInFlight >= 24 || publicBytes >= 64 * 1024 * 1024)) {
+        reportNetworkIssue({ ...info, reason: 'limit' }, 'De laadlimiet voor deze pagina is bereikt.', requestStep);
+        return route.abort();
+      }
       // Fetch a single hop so each redirect destination goes through this guard.
+      if (fetchPublic) publicInFlight++;
       let response;
       try {
-        response = await route.fetch({ maxRedirects: 0, maxRetries: 0, timeout: 8000 });
-        const location = response.headers().location;
-        if (response.status() >= 300 && response.status() < 400 && location &&
-          new URL(location, url).origin !== target.origin) {
-          reportNetworkIssue({ ...info, reason: 'redirect' }, `Doorverwijzing vanaf ${info.path} geblokkeerd.`, requestStep);
-          return await route.abort();
+        let forwarded;
+        if (fetchPublic) {
+          forwarded = await fetchPublic(url, { method: info.method, headers: await request.allHeaders() });
+          publicBytes += forwarded.body.length;
+          if (publicBytes > 64 * 1024 * 1024) {
+            reportNetworkIssue({ ...info, reason: 'limit' }, 'De laadlimiet voor deze pagina is bereikt.', requestStep);
+            return await route.abort();
+          }
+        } else {
+          response = await route.fetch({ maxRedirects: 0, maxRetries: 0, timeout: 8000 });
         }
-        await route.fulfill({ response });
-      } catch {
-        reportNetworkIssue({ ...info, reason: 'transport' }, `Verzoek naar ${info.path} kon niet worden uitgevoerd.`, requestStep);
+        const status = forwarded?.status ?? response.status();
+        const location = (forwarded?.headers ?? response.headers()).location;
+        if (status >= 300 && status < 400 && location) {
+          const next = new URL(location, url);
+          if (fetchPublic ? !isPublicUrl(next) : next.origin !== target.origin) {
+            reportNetworkIssue({ ...info, reason: 'redirect' }, `Doorverwijzing vanaf ${info.path} geblokkeerd.`, requestStep);
+            return await route.abort();
+          }
+        }
+        await route.fulfill(forwarded ?? { response });
+      } catch (error) {
+        const privateAddress = error.code === 'PUBLIC_ADDRESS_REQUIRED';
+        const detail = privateAddress ? `Verzoek naar ${info.path} geblokkeerd: geen publiek IP-adres.`
+          : `Verzoek naar ${info.path} kon niet worden uitgevoerd.`;
+        reportNetworkIssue({ ...info, reason: privateAddress ? 'scope' : 'transport' }, detail, requestStep);
         await route.abort().catch(() => {});
       } finally {
+        if (fetchPublic) publicInFlight--;
         await response?.dispose().catch(() => {});
       }
     });
@@ -165,13 +199,16 @@ async function withBrowser({ target, directory, run }, test) {
       const navigation = await record('Website openen', async () => {
         let response;
         try {
-          response = await page.goto(target.href, { waitUntil: 'domcontentloaded', timeout: 12000 });
+          response = await page.goto(target.href, {
+            waitUntil: 'domcontentloaded',
+            timeout: publicInspection ? 18000 : 12000,
+          });
         } catch (error) {
           throw new AgentError('navigation_failed', 'De startpagina kon niet worden geopend.', { cause: error });
         }
         const detail = `HTTP ${response?.status() ?? 'onbekend'}`;
         if (response?.ok()) return { status: 'passed', detail };
-        if (run.mode === 'demo') return { status: 'failed', detail };
+        if (run.mode !== 'ai') return { status: 'failed', detail };
         throw new AgentError('navigation_failed', detail);
       });
       if (navigation.status === 'passed') {
@@ -207,6 +244,52 @@ async function withBrowser({ target, directory, run }, test) {
   } finally {
     await browser.close();
   }
+}
+
+export function runInspection(options) {
+  return withBrowser(options, async ({ page, record }) => {
+    await record('Paginatitel controleren', async () => {
+      const title = (await page.title()).trim();
+      return title
+        ? { status: 'passed', detail: title.slice(0, 350) }
+        : { status: 'failed', detail: 'De pagina heeft geen titel.' };
+    });
+    await record('Zichtbare inhoud controleren', async () => {
+      const hasContent = await page.waitForFunction(() => {
+        const body = document.body;
+        if (!body) return false;
+        if (body.innerText.trim()) return true;
+        return [...body.querySelectorAll('img, svg, video, canvas, iframe')].some(element =>
+          element.getClientRects().length && getComputedStyle(element).visibility === 'visible');
+      }, null, { timeout: 2000 }).then(async handle => {
+        await handle.dispose();
+        return true;
+      }).catch(error => {
+        if (!(error instanceof playwrightErrors.TimeoutError)) throw error;
+        return false;
+      });
+      return hasContent
+        ? { status: 'passed', detail: 'De pagina toont tekst of visuele inhoud.' }
+        : { status: 'failed', detail: 'De pagina toonde binnen de wachttijd geen zichtbare inhoud.' };
+    });
+    for (const check of options.run.expectations ?? []) {
+      await record(`Controleer ‘${check.value}’`, async () => {
+        const actual = await visibleText(page, check.value).count() > 0;
+        return {
+          status: actual === check.expected ? 'passed' : 'failed',
+          detail: 'Zichtbaarheid van de opgegeven tekst gecontroleerd.',
+          check,
+          expected: check.expected,
+          actual,
+        };
+      });
+    }
+    const checked = options.run.steps.filter(step => step.check && ['passed', 'failed'].includes(step.status));
+    const complete = checked.length === (options.run.expectations?.length ?? 0);
+    options.run.coverage = complete ? 'full' : 'partial';
+    if (!complete) options.run.incompleteReason = 'Een of meer tekstcontroles konden niet worden afgerond.';
+    options.run.summary = 'De websitecontrole heeft de HTTP-respons, paginatitel en zichtbare inhoud bekeken.';
+  });
 }
 
 export function runDemo(options) {

@@ -11,11 +11,15 @@ npm ci
 npm start
 ```
 
-Open [het dashboard](http://127.0.0.1:4317). Kies **Demo met fout**, vink de toestemming aan en klik op **Start AI-test**. De vijf scenario’s zijn zoeken, categorieën filteren, productdetails openen, toevoegen aan de winkelwagen en de betaalstap bereiken. De muis activeert in de foutdemo een bug. Het toetsenbord kan wel in de winkelwagen, zodat de betaalstap apart kan worden getest. **Werkende demo** gebruikt dezelfde browsercontroles en de variant met een werkende winkelwagen.
+Open [het dashboard](http://127.0.0.1:4317). Kies **Demo met fout**, vink de toestemming aan en klik op **Start demotest**. De vijf scenario’s zijn zoeken, categorieën filteren, productdetails openen, toevoegen aan de winkelwagen en de betaalstap bereiken. De muis activeert in de foutdemo een bug. Het toetsenbord kan wel in de winkelwagen, zodat de betaalstap apart kan worden getest. **Werkende demo** gebruikt dezelfde browsercontroles en de variant met een werkende winkelwagen.
 
 Rapporten en screenshots staan per test in `runs/<id>/`. Het JSON-rapport bevat URL’s naar de screenshots op de lokale server.
 
-## Eigen testsite aansluiten
+## Publieke website controleren
+
+Plak een publieke HTTP(S)-URL waarvoor je toestemming hebt en klik op **Start websitetest**. Browser Agent controleert de HTTP-respons, paginatitel en zichtbare inhoud. Met **Te controleren tekst** voeg je een controle op zichtbare of afwezige tekst toe. Deze modus heeft geen API-sleutel of testopdracht nodig. De preview toont opnamen van de pagina zoals die voor een nieuwe bezoeker wordt geladen.
+
+## AI-modus voor een eigen testsite
 
 Stel voor een testomgeving met fictieve gegevens de volgende variabelen in voordat je de server start.
 

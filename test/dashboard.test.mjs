@@ -109,7 +109,11 @@ test('dashboard previews live and pinned steps and reports demo and AI results',
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'msedge' });
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 390, height: 850 } });
+  const capabilitiesResponse = page.waitForResponse(response => response.url() === `${origin}/api/capabilities` && response.ok());
   await page.goto(origin);
+  const capabilities = await capabilitiesResponse;
+  const { aiOrigins } = await capabilities.json();
+  assert.ok(aiOrigins.includes(fixtureOrigin));
   await page.locator('#preview-image').waitFor({ state: 'hidden' });
   await page.getByText('Het screenshot verschijnt na de eerste teststap.', { exact: true }).waitFor();
   await page.getByRole('checkbox').check();

@@ -38,8 +38,11 @@
         <form id="run-form">
           <label for="url">Website-URL</label>
           <input id="url" type="url" required>
-          <label for="task">Testopdracht</label>
-          <textarea id="task" required maxlength="2000" rows="4"></textarea>
+          <div id="task-field">
+            <label for="task">Testopdracht</label>
+            <textarea id="task" required maxlength="2000" rows="4"></textarea>
+          </div>
+          <p id="inspection-note" hidden>Controleert of de pagina opent en een titel en zichtbare inhoud heeft.</p>
           <fieldset id="expectation" hidden disabled>
             <legend>Controle (optioneel)</legend>
             <label for="expectation-text">Te controleren tekst</label>

@@ -2,15 +2,17 @@ import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { AgentError, runDemo, runAgent } from './runner.mjs';
+import { AgentError, runDemo, runAgent, runInspection } from './runner.mjs';
 import { parseExpectations } from './agent-actions.mjs';
 import { getRunOutcome } from './run-status.mjs';
+import { isPublicUrl } from './public-network.mjs';
 
 const port = Number(process.env.PORT || 4317);
 let base = `http://127.0.0.1:${port}`;
-const allowedOrigins = new Set((process.env.TEST_ORIGINS || '').split(',').map(value => value.trim()));
+const allowedOrigins = new Set((process.env.TEST_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean));
 const model = process.env.LLM_MODEL;
 const endpoint = process.env.LLM_ENDPOINT;
+const aiOrigins = model && endpoint ? [...allowedOrigins] : [];
 const configuredModelTimeout = Number(process.env.LLM_TIMEOUT_MS);
 const modelTimeoutMs = Number.isInteger(configuredModelTimeout) && configuredModelTimeout >= 1 &&
   configuredModelTimeout <= 120000 ? configuredModelTimeout : undefined;
@@ -56,21 +58,27 @@ async function start(request, response) {
     return json(response, 400, { error: 'Ongeldige aanvraag.' });
   }
   if (activeRun) return json(response, 409, { error: 'Er loopt al een test.' });
-  if (!input || input.authorized !== true || typeof input.task !== 'string' || !input.task.trim() || input.task.length > 2000) {
-    return json(response, 400, { error: 'Geef een opdracht op en bevestig je toestemming.' });
+  if (input?.authorized !== true) {
+    return json(response, 400, { error: 'Bevestig dat je toestemming hebt om de website te testen.' });
   }
   let target;
   try {
-    target = new URL(input.url);
+    if (typeof input.url === 'string') target = new URL(input.url);
   } catch {
-    return json(response, 400, { error: 'Voer een geldige URL in.' });
+    // Report malformed and missing URLs through the same validation below.
+  }
+  if (!target || !['http:', 'https:'].includes(target.protocol) || target.username || target.password) {
+    return json(response, 400, { error: 'Voer een geldige website-URL in met http:// of https://.' });
   }
   const demo = target.origin === base && target.pathname === '/demo';
-  if (!demo && (
-    !['http:', 'https:'].includes(target.protocol) || target.username || target.password ||
-    !allowedOrigins.has(target.origin) || !model || !endpoint
-  )) {
-    return json(response, 400, { error: 'Configureer een toegestaan testdomein en een taalmodel voor eigen websites.' });
+  const mode = demo ? 'demo' : aiOrigins.includes(target.origin) ? 'ai' : 'inspection';
+  const publicInspection = mode === 'inspection' && !allowedOrigins.has(target.origin);
+  if (publicInspection && !isPublicUrl(target)) {
+    return json(response, 400, { error: 'Gebruik een publieke website-URL. Een lokale testsite kun je instellen via TEST_ORIGINS.' });
+  }
+  const task = typeof input.task === 'string' ? input.task.trim() : '';
+  if (mode === 'ai' && (!task || task.length > 2000)) {
+    return json(response, 400, { error: 'Geef een AI-testopdracht op van maximaal 2.000 tekens.' });
   }
   let expectations;
   try {
@@ -81,7 +89,7 @@ async function start(request, response) {
 
   const id = randomUUID();
   const directory = new URL(`runs/${id}/`, import.meta.url);
-  const run = { id, url: target.href, task: input.task.trim(), mode: demo ? 'demo' : 'ai', status: 'running', steps: [] };
+  const run = { id, url: target.href, task: mode === 'inspection' ? 'Automatische websitecontrole' : task, mode, status: 'running', steps: [] };
   if (!demo && expectations.length) run.expectations = expectations;
   activeRun = run;
   json(response, 202, run);
@@ -89,8 +97,9 @@ async function start(request, response) {
   let outcome;
   try {
     await mkdir(directory, { recursive: true });
-    const options = { target, run, directory: fileURLToPath(directory), model, endpoint, modelTimeoutMs };
-    await (demo ? runDemo(options) : runAgent(options));
+    const options = { target, run, directory: fileURLToPath(directory), model, endpoint, modelTimeoutMs, publicInspection };
+    const runTest = { demo: runDemo, ai: runAgent, inspection: runInspection }[mode];
+    await runTest(options);
     outcome = getRunOutcome(run);
   } catch (error) {
     console.error(error.message);
@@ -134,6 +143,7 @@ const server = createServer(async (request, response) => {
       return await start(request, response);
     }
     if (request.method === 'GET') {
+      if (path === '/api/capabilities') return json(response, 200, { aiOrigins });
       const match = /^\/api\/runs\/([a-f0-9-]{36})(?:\/(\d+\.png))?$/.exec(path);
       if (match) {
         if (!match[2]) {

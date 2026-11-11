@@ -1,6 +1,8 @@
 const form = document.querySelector('#run-form');
 const url = document.querySelector('#url');
 const task = document.querySelector('#task');
+const taskField = document.querySelector('#task-field');
+const inspectionNote = document.querySelector('#inspection-note');
 const expectation = document.querySelector('#expectation');
 const expectationText = document.querySelector('#expectation-text');
 const expectationVisibility = document.querySelector('#expectation-visibility');
@@ -26,10 +28,19 @@ const previewCaption = document.querySelector('#preview-caption');
 const followLatest = document.querySelector('#follow-latest');
 let latestRun;
 let pinnedStepIndex = null;
+let aiOrigins = new Set();
+let currentMode;
+let aiTask = '';
+
+const demoTask = 'Test zoeken, categoriefilters, productdetails, toevoegen aan de winkelwagen en navigeren naar de betaalstap.';
+const startLabels = {
+  demo: 'Start demotest',
+  inspection: 'Start websitetest',
+  ai: 'Start AI-test',
+};
 
 function selectDemo(scenario) {
   url.value = `${location.origin}/demo?scenario=${scenario}`;
-  task.value = 'Test zoeken, categoriefilters, productdetails, toevoegen aan de winkelwagen en navigeren naar de betaalstap.';
   markPreset(scenario);
 }
 
@@ -45,18 +56,32 @@ function isDemoTarget(target) {
   return target?.origin === location.origin && target.pathname === '/demo';
 }
 
-function isAiTarget(target = targetUrl()) {
-  return target && ['http:', 'https:'].includes(target.protocol) && !isDemoTarget(target);
+function targetMode(target) {
+  if (isDemoTarget(target)) return 'demo';
+  return aiOrigins.has(target?.origin) ? 'ai' : 'inspection';
+}
+
+function updateTargetFields() {
+  const target = targetUrl();
+  const mode = targetMode(target);
+  const showExpectation = mode !== 'demo' && ['http:', 'https:'].includes(target?.protocol);
+  if (mode !== currentMode) {
+    if (currentMode === 'ai') aiTask = task.value;
+    task.value = mode === 'demo' ? demoTask : aiTask;
+    currentMode = mode;
+  }
+  taskField.hidden = mode === 'inspection';
+  task.disabled = mode === 'inspection';
+  task.readOnly = mode === 'demo';
+  task.required = mode === 'ai';
+  inspectionNote.hidden = mode !== 'inspection' || !showExpectation;
+  startLabel.textContent = startLabels[mode];
+  expectation.hidden = !showExpectation;
+  expectation.disabled = !showExpectation;
 }
 
 function markPreset(scenario) {
-  const target = targetUrl();
-  const showExpectation = Boolean(isAiTarget(target));
-  const demo = isDemoTarget(target);
-  task.readOnly = demo;
-  startLabel.textContent = demo ? 'Start demotest' : 'Start AI-test';
-  expectation.hidden = !showExpectation;
-  expectation.disabled = !showExpectation;
+  updateTargetFields();
   for (const preset of presets) {
     const selected = preset.dataset.demo === scenario;
     preset.classList.toggle('selected', selected);
@@ -70,6 +95,12 @@ url.addEventListener('input', () => {
   markPreset(preset?.dataset.demo);
 });
 selectDemo('bug');
+const capabilities = request('/api/capabilities').then(data => {
+  aiOrigins = new Set(data.aiOrigins);
+  updateTargetFields();
+}).catch(() => {
+  // The server still validates the target and its selected test mode when a run starts.
+});
 
 const labels = {
   running: 'Bezig', completed: 'Afgerond', completed_with_issues: 'Afgerond met aandachtspunten',
@@ -83,6 +114,7 @@ const coverageLabels = {
   partial: 'Dekking gedeeltelijk',
   unknown: 'Dekking onbekend',
 };
+const modeLabels = { demo: 'Demo', inspection: 'Website', ai: 'AI' };
 
 function screenshotLink(href, label) {
   const link = document.createElement('a');
@@ -140,7 +172,9 @@ function appendObservation(row, label, value) {
 }
 
 function renderCounts(run) {
-  const checks = run.mode === 'demo' ? run.steps.slice(1) : run.steps.filter(step => step.check);
+  let checks = run.steps;
+  if (run.mode === 'demo') checks = run.steps.slice(1);
+  if (run.mode === 'ai') checks = run.steps.filter(step => step.check);
   passedCount.textContent = checks.filter(step => step.status === 'passed').length;
   failedCount.textContent = checks.filter(step => step.status === 'failed').length;
   findingCount.textContent = run.unverifiedFindings ?? run.steps.filter(step => step.status === 'finding').length;
@@ -221,7 +255,7 @@ function render(run) {
   latestRun = run;
   document.querySelector('#empty').hidden = run.steps.length > 0;
   const coverage = run.coverage ?? 'unknown';
-  status.textContent = `${run.mode === 'demo' ? 'Demo' : 'AI'} · ${labels[run.status]} · ${coverageLabels[coverage] ?? coverageLabels.unknown}`;
+  status.textContent = `${modeLabels[run.mode] ?? modeLabels.ai} · ${labels[run.status]} · ${coverageLabels[coverage] ?? coverageLabels.unknown}`;
   status.dataset.state = run.status;
   status.dataset.coverage = coverage;
   const description = [run.summary, run.status !== 'error' && run.incompleteReason].filter(Boolean).join(' ');
@@ -292,9 +326,14 @@ form.addEventListener('submit', async event => {
   start.disabled = true;
   error.hidden = true;
   try {
-    const input = { url: url.value, task: task.value, authorized: authorized.checked };
+    const submittedUrl = url.value;
+    if (!isDemoTarget(targetUrl())) await capabilities;
+    if (url.value !== submittedUrl || !form.reportValidity()) return;
+    const mode = targetMode(targetUrl());
+    const input = { url: submittedUrl, authorized: authorized.checked };
+    if (mode !== 'inspection') input.task = task.value;
     const value = expectationText.value.trim();
-    if (value && isAiTarget()) {
+    if (value && !expectation.disabled) {
       input.expectations = [{ condition: 'text_visible', value, expected: expectationVisibility.value === 'visible' }];
     }
     let run = await request('/api/runs', {
