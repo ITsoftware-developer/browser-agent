@@ -8,6 +8,16 @@ const expectationText = document.querySelector('#expectation-text');
 const expectationVisibility = document.querySelector('#expectation-visibility');
 const securityOption = document.querySelector('#security-option');
 const securityEnabled = document.querySelector('#security-enabled');
+const activeSecurityOption = document.querySelector('#active-security-option');
+const activeSecurityEnabled = document.querySelector('#active-security-enabled');
+const activeSecurityNote = document.querySelector('#active-security-note');
+const activeSecurityPanel = document.querySelector('#active-security-report');
+const activeSecurityStatus = document.querySelector('#active-security-status');
+const activeSecurityChecks = document.querySelector('#active-security-checks');
+const activeSecurityCookies = document.querySelector('#active-security-cookies');
+const activeSecurityCookieObservations = document.querySelector('#active-security-cookie-observations');
+const activeSecurityExplanation = document.querySelector('#active-security-explanation');
+const activeSecurityExplanationText = document.querySelector('#active-security-explanation-text');
 const securityPanel = document.querySelector('#security-report');
 const securityStatus = document.querySelector('#security-status');
 const securityCount = document.querySelector('#security-count');
@@ -47,6 +57,8 @@ const followLatest = document.querySelector('#follow-latest');
 let latestRun;
 let pinnedStepIndex = null;
 let aiOrigins = new Set();
+let securityLabOrigin;
+let lastActiveSecurityResults;
 let verifiedOrigins = new Set();
 let requireDomainVerification = false;
 const domainStates = new Map();
@@ -59,6 +71,7 @@ const startLabels = {
   demo: 'Start demotest',
   inspection: 'Start websitetest',
   ai: 'Start AI-test',
+  lab: 'Start labcontrole',
 };
 const domainDate = new Intl.DateTimeFormat('nl-NL', { dateStyle: 'short', timeStyle: 'short' });
 
@@ -79,8 +92,14 @@ function isDemoTarget(target) {
   return target?.origin === location.origin && target.pathname === '/demo';
 }
 
+function isLabTarget(target) {
+  return Boolean(target && securityLabOrigin && !requireDomainVerification &&
+    ['/vulnerable', '/fixed'].some(path => target.href === `${securityLabOrigin}${path}`));
+}
+
 function targetMode(target) {
   if (isDemoTarget(target)) return 'demo';
+  if (isLabTarget(target) && activeSecurityEnabled.checked) return 'lab';
   if (securityEnabled.checked) return 'inspection';
   return aiOrigins.has(target?.origin) ? 'ai' : 'inspection';
 }
@@ -95,7 +114,7 @@ function isDomainVerified(origin) {
 }
 
 function renderDomainVerification(target = targetUrl()) {
-  domainVerification.hidden = !isExternalTarget(target);
+  domainVerification.hidden = !isExternalTarget(target) || targetMode(target) === 'lab';
   if (domainVerification.hidden) {
     domainVerification.open = false;
     delete domainVerification.dataset.origin;
@@ -174,22 +193,30 @@ async function runDomainAction(action) {
 function updateTargetFields() {
   const target = targetUrl();
   const mode = targetMode(target);
-  const showExpectation = isExternalTarget(target);
+  const external = isExternalTarget(target);
+  const lab = mode === 'lab';
+  const showExpectation = external && !lab;
+  const showTask = mode === 'demo' || mode === 'ai';
+  const labAvailable = isLabTarget(target);
   if (mode !== currentMode) {
     if (currentMode === 'ai') aiTask = task.value;
     task.value = mode === 'demo' ? demoTask : aiTask;
     currentMode = mode;
   }
-  taskField.hidden = mode === 'inspection';
-  task.disabled = mode === 'inspection';
+  taskField.hidden = !showTask;
+  task.disabled = !showTask;
   task.readOnly = mode === 'demo';
   task.required = mode === 'ai';
-  inspectionNote.hidden = mode !== 'inspection' || !showExpectation;
+  inspectionNote.hidden = mode !== 'inspection' || !external;
+  activeSecurityNote.hidden = !lab;
   startLabel.textContent = startLabels[mode];
   expectation.hidden = !showExpectation;
   expectation.disabled = !showExpectation;
-  securityOption.hidden = !showExpectation;
-  securityEnabled.disabled = !showExpectation;
+  securityOption.hidden = !external;
+  securityEnabled.disabled = !external || lab;
+  activeSecurityOption.hidden = !labAvailable;
+  activeSecurityEnabled.disabled = !labAvailable;
+  if (!labAvailable) activeSecurityEnabled.checked = false;
   renderDomainVerification(target);
 }
 
@@ -208,11 +235,13 @@ url.addEventListener('input', () => {
   markPreset(preset?.dataset.demo);
 });
 securityEnabled.addEventListener('change', updateTargetFields);
+activeSecurityEnabled.addEventListener('change', updateTargetFields);
 domainChallenge.addEventListener('click', () => runDomainAction('challenge'));
 domainVerify.addEventListener('click', () => runDomainAction('verify'));
 selectDemo('bug');
 const capabilities = request('/api/capabilities').then(data => {
   aiOrigins = new Set(data.aiOrigins);
+  securityLabOrigin = data.securityLabOrigin;
   verifiedOrigins = new Set(data.verifiedOrigins);
   requireDomainVerification = data.requireDomainVerification === true;
   updateTargetFields();
@@ -232,7 +261,7 @@ const coverageLabels = {
   partial: 'Dekking gedeeltelijk',
   unknown: 'Dekking onbekend',
 };
-const modeLabels = { demo: 'Demo', inspection: 'Website', ai: 'AI' };
+const modeLabels = { demo: 'Demo', inspection: 'Website', ai: 'AI', lab: 'Lab' };
 
 function screenshotLink(href, label) {
   const link = document.createElement('a');
@@ -373,6 +402,16 @@ const securityLabels = {
 };
 const securitySeverity = { info: 'Informatief', low: 'Laag', medium: 'Middel' };
 
+function appendSecurityReferences(item, references) {
+  for (const reference of references ?? []) {
+    if (!reference.url.startsWith('https://github.com/OWASP/ASVS/blob/v5.0.0/')) continue;
+    const citation = document.createElement('p');
+    citation.append(screenshotLink(reference.url, `ASVS ${reference.id} ↗`));
+    if (reference.applicability) citation.append(` · ${reference.applicability}`);
+    item.append(citation);
+  }
+}
+
 function renderSecurity(run) {
   securityPanel.hidden = !run.securityRequested;
   if (securityPanel.hidden) return;
@@ -427,16 +466,144 @@ function renderSecurity(run) {
       advice.textContent = check.advice;
       item.append(advice);
     }
-    for (const reference of check.asvs ?? []) {
-      if (reference.url.startsWith('https://github.com/OWASP/ASVS/blob/v5.0.0/')) {
-        const citation = document.createElement('p');
-        citation.append(screenshotLink(reference.url, `ASVS ${reference.id} ↗`));
-        if (reference.applicability) citation.append(` · ${reference.applicability}`);
-        item.append(citation);
-      }
-    }
+    appendSecurityReferences(item, check.asvs);
     securityChecks.append(item);
   }
+}
+
+const labOutcomeLabels = {
+  confirmed: 'Kwetsbaarheid bevestigd',
+  protected: 'Afgeweerd',
+  inconclusive: 'Onbeslist',
+};
+const labObservationLabels = {
+  aliceSessionHttpStatus: 'Aanmelden Alice',
+  bobSessionHttpStatus: 'Aanmelden Bob',
+  distinctSessions: 'Afzonderlijke sessies',
+  anonymousHttpStatus: 'Toegang zonder sessie',
+  aliceOwn: 'Eigen record van Alice',
+  bobOwn: 'Eigen record van Bob',
+  cross: 'Bob vraagt het record van Alice op',
+  before: 'Eigen record vóór uitloggen',
+  logoutHttpStatus: 'Uitloggen',
+  cookieRemoved: 'Cookie na uitloggen uit de browser verwijderd',
+  afterLogout: 'Verzoek uit dezelfde browsercontext na uitloggen',
+  replayCookieStored: 'Oorspronkelijke cookie in aparte browsercontext geplaatst',
+  replay: 'Hergebruik van de oorspronkelijke sessie',
+};
+
+function labBoolean(value) {
+  if (value === true) return 'Ja';
+  if (value === false) return 'Nee';
+  return 'Onbekend';
+}
+
+function labEvidenceValue(value) {
+  if (value && typeof value === 'object') {
+    return `${labEvidenceValue(value.httpStatus)} · Verwacht record ontvangen · ${labBoolean(value.recordMatched)}`;
+  }
+  if (Number.isInteger(value)) return `HTTP ${value}`;
+  if (typeof value === 'boolean') return labBoolean(value);
+  return 'HTTP-status onbekend';
+}
+
+function appendLabDefinition(list, label, value) {
+  const term = document.createElement('dt');
+  term.textContent = label;
+  const definition = document.createElement('dd');
+  definition.textContent = value;
+  list.append(term, definition);
+}
+
+function renderLabCheck(check) {
+  const item = document.createElement('li');
+  const title = document.createElement('h3');
+  title.textContent = check.title;
+  const badge = document.createElement('span');
+  badge.className = 'badge';
+  badge.dataset.state = check.status;
+  badge.textContent = labOutcomeLabels[check.status];
+  item.append(title, badge);
+
+  const observed = check.observed ?? {};
+  const key = Object.hasOwn(observed, 'cross') ? 'cross' : 'replay';
+  if (Object.hasOwn(observed, key)) {
+    const mainEvidence = document.createElement('p');
+    mainEvidence.textContent = `${labObservationLabels[key]} · ${labEvidenceValue(observed[key])}`;
+    item.append(mainEvidence);
+  }
+
+  const details = document.createElement('details');
+  const disclosure = document.createElement('summary');
+  disclosure.textContent = 'Waarnemingen en reproduceerstappen';
+  const observations = document.createElement('dl');
+  observations.className = 'lab-observations';
+  for (const [field, label] of Object.entries(labObservationLabels)) {
+    if (field !== key && Object.hasOwn(observed, field)) {
+      appendLabDefinition(observations, label, labEvidenceValue(observed[field]));
+    }
+  }
+  const reproduction = document.createElement('ol');
+  reproduction.className = 'lab-reproduction';
+  for (const instruction of check.reproduction ?? []) {
+    const step = document.createElement('li');
+    step.textContent = instruction;
+    reproduction.append(step);
+  }
+  details.append(disclosure, observations, reproduction);
+  appendSecurityReferences(details, check.asvs);
+  item.append(details);
+  return item;
+}
+
+function renderLabCookies(browserCookies) {
+  activeSecurityCookieObservations.replaceChildren();
+  for (const [key, name] of [
+    ['alice', 'Alice vóór uitloggen'],
+    ['bob', 'Bob'],
+    ['afterLogout', 'Alice na uitloggen'],
+    ['replay', 'Aparte context met oorspronkelijke cookie'],
+  ]) {
+    const cookie = browserCookies?.[key];
+    if (!cookie) continue;
+    const title = document.createElement('h3');
+    title.textContent = name;
+    const attributes = document.createElement('dl');
+    attributes.className = 'lab-observations';
+    const sameSite = Object.entries({ sameSiteLax: 'Lax', sameSiteStrict: 'Strict', sameSiteNone: 'None' })
+      .find(([flag]) => cookie[flag] === true)?.[1];
+    appendLabDefinition(attributes, 'Opgeslagen in de browser', labBoolean(cookie.stored));
+    appendLabDefinition(attributes, 'Secure', cookie.stored ? labBoolean(cookie.secure) : 'Niet waargenomen');
+    appendLabDefinition(attributes, 'HttpOnly', cookie.stored ? labBoolean(cookie.httpOnly) : 'Niet waargenomen');
+    appendLabDefinition(attributes, 'SameSite', sameSite ?? 'Niet waargenomen');
+    appendLabDefinition(attributes, 'Zichtbaar voor JavaScript', labBoolean(cookie.scriptVisible));
+    const account = document.createElement('section');
+    account.append(title, attributes);
+    activeSecurityCookieObservations.append(account);
+  }
+  activeSecurityCookies.hidden = !activeSecurityCookieObservations.children.length;
+}
+
+function renderActiveSecurity(run) {
+  activeSecurityPanel.hidden = run.mode !== 'lab';
+  if (activeSecurityPanel.hidden) {
+    lastActiveSecurityResults = undefined;
+    return;
+  }
+  const { checks = [], browserCookies, explanation } = run.activeSecurity ?? {};
+  activeSecurityExplanation.hidden = !explanation;
+  const explanationText = explanation ?? '';
+  if (activeSecurityExplanationText.textContent !== explanationText) activeSecurityExplanationText.textContent = explanationText;
+  const statusText = checks.length ? 'Vaste controles met synthetische accounts en records.'
+    : run.status === 'running' ? 'De labcontroles worden uitgevoerd…' : 'De labresultaten zijn niet beschikbaar.';
+  if (activeSecurityStatus.textContent !== statusText) activeSecurityStatus.textContent = statusText;
+  const resultKey = JSON.stringify([run.id, checks, browserCookies]);
+  if (lastActiveSecurityResults === resultKey) return;
+  lastActiveSecurityResults = resultKey;
+  activeSecurityChecks.hidden = !checks.length;
+  activeSecurityChecks.replaceChildren(...checks.map(renderLabCheck));
+  activeSecurityCookies.open = false;
+  renderLabCookies(browserCookies);
 }
 
 function render(run) {
@@ -455,6 +622,7 @@ function render(run) {
   summary.textContent = description;
   renderCounts(run);
   renderSecurity(run);
+  renderActiveSecurity(run);
   download.hidden = run.status === 'running';
   for (const step of run.steps.slice(steps.children.length)) {
     const index = steps.children.length;
@@ -538,7 +706,8 @@ form.addEventListener('submit', async event => {
     }
     const input = { url: submittedUrl, authorized: authorized.checked };
     if (securityEnabled.checked && !securityEnabled.disabled) input.security = true;
-    if (mode !== 'inspection') input.task = task.value;
+    if (mode === 'lab') input.activeSecurity = true;
+    if (!task.disabled) input.task = task.value;
     const value = expectationText.value.trim();
     if (value && !expectation.disabled) {
       input.expectations = [{ condition: 'text_visible', value, expected: expectationVisibility.value === 'visible' }];

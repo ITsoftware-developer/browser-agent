@@ -196,7 +196,10 @@ test('website inspection works without a model or task and rejects unconfigured 
 });
 
 test('strict mode gates runs on owner-scoped DNS verification before launching a browser', async t => {
-  const origin = await startApp(t, { REQUIRE_DOMAIN_VERIFICATION: '1' });
+  const origin = await startApp(t, {
+    REQUIRE_DOMAIN_VERIFICATION: '1',
+    SECURITY_LAB_ORIGIN: 'http://127.0.0.1:4327',
+  });
   const settings = await fetch(`${origin}/api/capabilities`);
   const owner = settings.headers.get('set-cookie').split(';', 1)[0];
   assert.match(settings.headers.get('set-cookie'), /HttpOnly; SameSite=Strict/);
@@ -210,6 +213,10 @@ test('strict mode gates runs on owner-scoped DNS verification before launching a
   const blocked = await post('/api/runs', owner, { url, authorized: true, security: true });
   assert.equal(blocked.status, 403);
   assert.equal((await blocked.json()).code, 'DOMAIN_NOT_VERIFIED');
+  const labBlocked = await post('/api/runs', owner, {
+    url: 'http://127.0.0.1:4327/vulnerable', authorized: true, activeSecurity: true,
+  });
+  assert.equal(labBlocked.status, 403);
   const challenge = await post('/api/domain/challenge', owner, { url });
   assert.equal(challenge.status, 200);
   const proof = await challenge.json();

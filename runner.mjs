@@ -425,7 +425,7 @@ Verwijs bij bevindingen naar relevante eerdere stappen uit observation.evidenceS
 Gebruik alleen aangeboden elementen en fictieve testdata. Doe geen betalingen, accountacties of definitieve wijzigingen.
 Beschrijf in de samenvatting wat je kon testen.`;
 
-async function requestModel({ endpoint, model, modelTimeoutMs = 25000 }, messages) {
+export async function requestModel({ endpoint, model, modelTimeoutMs = 25000 }, messages) {
   const headers = { 'Content-Type': 'application/json' };
   if (process.env.LLM_API_KEY) headers.Authorization = `Bearer ${process.env.LLM_API_KEY}`;
   const signal = AbortSignal.timeout(modelTimeoutMs);

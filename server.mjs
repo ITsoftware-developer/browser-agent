@@ -9,6 +9,8 @@ import { isPublicUrl } from './public-network.mjs';
 import { buildSecurityReport } from './security-checks.mjs';
 import { createDomainVerification } from './domain-verification.mjs';
 import { redactReportValue, reportOwner } from './report-privacy.mjs';
+import { configuredLabOrigin, labProfile } from './security-lab/profile.mjs';
+import { runLabChecks } from './security-lab/run.mjs';
 
 const port = Number(process.env.PORT || 4317);
 let base = `http://127.0.0.1:${port}`;
@@ -17,6 +19,7 @@ const model = process.env.LLM_MODEL;
 const endpoint = process.env.LLM_ENDPOINT;
 const aiOrigins = model && endpoint ? [...allowedOrigins] : [];
 const requireDomainVerification = process.env.REQUIRE_DOMAIN_VERIFICATION === '1';
+const securityLabOrigin = requireDomainVerification ? null : configuredLabOrigin(process.env.SECURITY_LAB_ORIGIN);
 const domains = createDomainVerification();
 const configuredModelTimeout = Number(process.env.LLM_TIMEOUT_MS);
 const modelTimeoutMs = Number.isInteger(configuredModelTimeout) && configuredModelTimeout >= 1 &&
@@ -77,8 +80,13 @@ async function start(input, response, owner) {
     return json(response, 400, { error: 'Voer een geldige website-URL in met http:// of https://.' });
   }
   const demo = target.origin === base && target.pathname === '/demo';
-  const securityRequested = !demo && input.security === true;
-  const mode = demo ? 'demo' : !securityRequested && aiOrigins.includes(target.origin) ? 'ai' : 'inspection';
+  const activeRequested = input.activeSecurity === true;
+  const profile = activeRequested && target.origin === securityLabOrigin ? labProfile(target) : null;
+  if (activeRequested && !profile) {
+    return json(response, 403, { error: 'Actieve controles zijn beschikbaar voor de ingestelde lokale labvarianten.' });
+  }
+  const securityRequested = !profile && !demo && input.security === true;
+  const mode = profile ? 'lab' : demo ? 'demo' : !securityRequested && aiOrigins.includes(target.origin) ? 'ai' : 'inspection';
   const verifiedOrigins = !demo && requireDomainVerification ? new Set(domains.verifiedOrigins(owner)) : undefined;
   const publicNetwork = Boolean(verifiedOrigins) || (mode === 'inspection' && !allowedOrigins.has(target.origin));
   if (publicNetwork && !isPublicUrl(target)) {
@@ -100,9 +108,11 @@ async function start(input, response, owner) {
 
   const id = randomUUID();
   const directory = new URL(`runs/${id}/`, import.meta.url);
-  const run = { id, url: target.href, task: mode === 'inspection' ? 'Automatische websitecontrole' : task, mode, status: 'running', steps: [] };
+  const runTask = profile ? 'Actieve autorisatie- en sessiecontrole in Security Lab'
+    : mode === 'inspection' ? 'Automatische websitecontrole' : task;
+  const run = { id, url: target.href, task: runTask, mode, status: 'running', steps: [] };
   if (securityRequested) run.securityRequested = true;
-  if (!demo && expectations.length) run.expectations = expectations;
+  if (!profile && !demo && expectations.length) run.expectations = expectations;
   activeRun = { owner, run };
   json(response, 202, run, redactReportValue);
 
@@ -110,8 +120,8 @@ async function start(input, response, owner) {
   try {
     await mkdir(directory, { recursive: true });
     await writeFile(new URL('owner', directory), owner, { flag: 'wx', mode: 0o600 });
-    const options = { target, run, directory: fileURLToPath(directory), model, endpoint, modelTimeoutMs, publicNetwork, verifiedOrigins };
-    const runTest = { demo: runDemo, ai: runAgent, inspection: runInspection }[mode];
+    const options = { target, run, directory: fileURLToPath(directory), model, endpoint, modelTimeoutMs, publicNetwork, verifiedOrigins, profile };
+    const runTest = { demo: runDemo, ai: runAgent, inspection: runInspection, lab: runLabChecks }[mode];
     await runTest(options);
     outcome = getRunOutcome(run);
   } catch (error) {
@@ -163,7 +173,9 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET') {
       if (path === '/api/capabilities') {
         const owner = reportOwner(request, response);
-        return json(response, 200, { aiOrigins, requireDomainVerification, verifiedOrigins: domains.verifiedOrigins(owner) });
+        const capabilities = { aiOrigins, requireDomainVerification, verifiedOrigins: domains.verifiedOrigins(owner) };
+        if (securityLabOrigin) capabilities.securityLabOrigin = securityLabOrigin;
+        return json(response, 200, capabilities);
       }
       const match = /^\/api\/runs\/([a-f0-9-]{36})(?:\/(\d+\.png))?$/.exec(path);
       if (match) {

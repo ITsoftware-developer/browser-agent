@@ -53,7 +53,7 @@ De demo gebruikt vaste Playwright-controles. De AI-modus kan ook wachten op zich
 
 Start de aparte oefenwebsite vanuit de projectmap met `npm run lab` en open [Security Lab](http://127.0.0.1:4327). De server luistert op het lokale loopbackadres en gebruikt fictieve accounts en dossiers. Kies de kwetsbare of herstelde variant om de doelpagina te openen.
 
-Met `npm run lab:verify` start je een tijdelijke labserver en voer je de vaste controles uit. Het JSON-resultaat bevat verwachte en ontvangen waarden, reproduceerstappen en toepasselijke OWASP ASVS-verwijzingen. Het commando geeft een foutstatus als een uitkomst afwijkt van de bekende labresultaten.
+Met `npm run lab:verify` start je een tijdelijke labserver en voer je de vaste controles uit. Edge gebruikt aparte browsercontexten voor de fictieve gebruikers en verwerkt de sessiecookies zelf. Het JSON-resultaat bevat verwachte en ontvangen waarden, reproduceerstappen en toepasselijke OWASP ASVS-verwijzingen. Het commando geeft een foutstatus als een uitkomst afwijkt van de bekende labresultaten.
 
 | Proef | Kwetsbare variant | Herstelde variant |
 | --- | --- | --- |
@@ -70,7 +70,10 @@ Laat het lab in een eigen terminal draaien. Start Browser Agent in een tweede Po
 
 ```powershell
 $env:TEST_ORIGINS = 'http://127.0.0.1:4327'
+$env:SECURITY_LAB_ORIGIN = 'http://127.0.0.1:4327'
 node server.mjs
 ```
 
-Plak `http://127.0.0.1:4327/vulnerable` of `http://127.0.0.1:4327/fixed` in het dashboard. Vink de toestemming en **Passieve beveiligingscontrole** aan. Deze route toont de headers en cookie-attributen met een screenshot van de pagina. Gebruik `npm run lab:verify` voor de dossier- en afmeldproeven.
+Plak `http://127.0.0.1:4327/vulnerable` of `http://127.0.0.1:4327/fixed` in het dashboard. Vink de toestemming en **Actieve labcontrole** aan en klik op **Start labcontrole**. De actieve controles gelden voor deze twee routes op het ingestelde loopbackadres. Bij gebruik van strikte DNS-verificatie is deze lokale optie afgeschermd.
+
+Het rapport laat de dossieropvragen, afmeldproef en waargenomen cookie-attributen per browsercontext zien. Een geconfigureerd taalmodel kan bij bevestigde bevindingen uitleg toevoegen op basis van de vastgelegde HTTP-waarnemingen. De testuitkomst wordt berekend uit het browserbewijs. Voor headers en cookie-attributen van de documentrespons gebruik je **Passieve beveiligingscontrole**.

@@ -179,6 +179,7 @@ export async function startSecurityLab({ port = 0 } = {}) {
 
       if (!action) {
         if (!onlyMethod(request, response, 'GET')) return;
+        response.setHeader('X-Browser-Agent-Security-Lab', '1');
         if (!session) response.setHeader('Set-Cookie', sessionCookie(variant, demoCookieValue, sessionLifetimeMs / 1000));
         response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return response.end(page(variant));

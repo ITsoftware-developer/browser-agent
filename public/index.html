@@ -44,6 +44,19 @@
         <ul id="security-checks"></ul>
       </details>
     </section>
+    <section id="active-security-report" class="panel security-report" aria-labelledby="active-security-heading" hidden>
+      <h2 id="active-security-heading">Actieve labresultaten</h2>
+      <p id="active-security-status" role="status"></p>
+      <ul id="active-security-checks" hidden></ul>
+      <details id="active-security-cookies" hidden>
+        <summary>Cookie-attributen in de browser</summary>
+        <div id="active-security-cookie-observations"></div>
+      </details>
+      <div id="active-security-explanation" hidden>
+        <h3>AI-uitleg</h3>
+        <p id="active-security-explanation-text"></p>
+      </div>
+    </section>
     <div class="layout">
       <section class="panel settings" aria-labelledby="settings-heading">
         <h2 id="settings-heading">Nieuwe test</h2>
@@ -78,6 +91,7 @@
             <textarea id="task" required maxlength="2000" rows="4"></textarea>
           </div>
           <p id="inspection-note" hidden>Controleert of de pagina opent en een titel en zichtbare inhoud heeft.</p>
+          <p id="active-security-note" hidden>Controleert toegang tot oefenrecords en sessiehergebruik na uitloggen.</p>
           <fieldset id="expectation" hidden disabled>
             <legend>Controle (optioneel)</legend>
             <label for="expectation-text">Te controleren tekst</label>
@@ -88,6 +102,9 @@
               <option value="hidden">Niet zichtbaar</option>
             </select>
           </fieldset>
+          <label id="active-security-option" class="check" hidden>
+            <input id="active-security-enabled" type="checkbox" disabled> Actieve labcontrole
+          </label>
           <label id="security-option" class="check" hidden>
             <input id="security-enabled" type="checkbox" disabled> Passieve beveiligingscontrole
           </label>

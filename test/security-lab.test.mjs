@@ -32,7 +32,7 @@ test('the lab accepts its loopback host and blocks cross-origin session creation
 });
 
 test('the Security Lab command reproduces seeded findings and verifies the reference controls', async () => {
-  const { stdout } = await execute(process.execPath, [verifier], { timeout: 15000 });
+  const { stdout } = await execute(process.execPath, [verifier], { timeout: 30000 });
   const report = JSON.parse(stdout);
   assert.equal(report.mode, 'security-lab');
   assert.equal(report.status, 'passed');
@@ -68,7 +68,18 @@ test('the Security Lab command reproduces seeded findings and verifies the refer
     assert.deepEqual(authorization.cross, { httpStatus: outcome.cross, recordMatched: outcome.cross === 200 });
     const logout = result.active.find(check => check.id === 'logout-replay').observed;
     assert.equal(logout.logoutHttpStatus, 204);
+    assert.equal(logout.cookieRemoved, true);
+    assert.deepEqual(logout.afterLogout, { httpStatus: 401, recordMatched: false });
+    assert.equal(logout.replayCookieStored, true);
     assert.deepEqual(logout.replay, { httpStatus: outcome.replay, recordMatched: outcome.replay === 200 });
+    assert.equal(result.browserCookiesMatch, true);
+    const restored = variant === 'fixed';
+    assert.equal(result.browserCookies.alice.stored, true);
+    assert.equal(result.browserCookies.alice.secure, restored);
+    assert.equal(result.browserCookies.alice.httpOnly, restored);
+    assert.equal(result.browserCookies.alice.scriptVisible, !restored);
+    if (restored) assert.equal(result.browserCookies.alice.sameSiteLax, true);
+    assert.equal(result.browserCookies.afterLogout.stored, false);
   }
-  assert.doesNotMatch(stdout, /demo-sample|security_lab_session=|Synthetisch dossier van/);
+  assert.doesNotMatch(stdout, /demo-sample|security_lab_session=|Synthetisch dossier van|[a-f0-9]{48}/);
 });
