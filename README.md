@@ -48,3 +48,29 @@ De planner verwacht een Chat Completions-compatibel JSON-antwoord. De provider o
 Vul bij **Te controleren tekst** de exacte tekst in die tijdens de opgegeven flow zichtbaar of afwezig hoort te zijn. Via `POST /api/runs` kun je maximaal tien van deze regels meegeven als `expectations`, bijvoorbeeld `[{"condition":"text_visible","value":"1 artikel in winkelwagen","expected":true}]`. Een geverifieerde AI-fout vereist een afwijking van zo’n regel en een screenshot bij die controle. Afwijkingen van door het model voorgestelde verwachtingen verschijnen als **Te beoordelen**.
 
 De demo gebruikt vaste Playwright-controles. De AI-modus kan ook wachten op zichtbare of afwezige tekst en een screenshot van de viewport of een aangeboden element maken. De modelprovider heeft standaard 25 seconden per antwoord. Stel desgewenst `LLM_TIMEOUT_MS` in om die grens te wijzigen. Bij een modeltimeout bevat het rapport de al uitgevoerde stappen. Draai `npm test` voor de demoflows en de AI-regressietests met een gesimuleerde modelprovider.
+
+## Security Lab
+
+Start de aparte oefenwebsite vanuit de projectmap met `npm run lab` en open [Security Lab](http://127.0.0.1:4327). De server luistert op het lokale loopbackadres en gebruikt fictieve accounts en dossiers. Kies de kwetsbare of herstelde variant om de doelpagina te openen.
+
+Met `npm run lab:verify` start je een tijdelijke labserver en voer je de vaste controles uit. Het JSON-resultaat bevat verwachte en ontvangen waarden, reproduceerstappen en toepasselijke OWASP ASVS-verwijzingen. Het commando geeft een foutstatus als een uitkomst afwijkt van de bekende labresultaten.
+
+| Proef | Kwetsbare variant | Herstelde variant |
+| --- | --- | --- |
+| Responseheaders | CSP en `nosniff` ontbreken | Beide headers zijn aanwezig |
+| Cookie-attributen | Secure, HttpOnly en SameSite ontbreken | De drie attributen zijn aanwezig |
+| Toegang tot een dossier | Bob ontvangt het fictieve dossier van Alice | Bob krijgt HTTP 403 |
+| Sessie na afmelden | Het oude testtoken geeft nog toegang | Het oude testtoken geeft HTTP 401 |
+
+De header- en cookieproeven gebruiken de bestaande passieve beveiligingsmodule. De dossier- en sessieproeven gebruiken uitsluitend de fictieve accounts van de tijdelijk gestarte labserver. De herstelvariant dient als referentie voor deze vier proeven.
+
+### Lab bekijken in Browser Agent
+
+Laat het lab in een eigen terminal draaien. Start Browser Agent in een tweede PowerShell-venster vanuit de projectmap met:
+
+```powershell
+$env:TEST_ORIGINS = 'http://127.0.0.1:4327'
+node server.mjs
+```
+
+Plak `http://127.0.0.1:4327/vulnerable` of `http://127.0.0.1:4327/fixed` in het dashboard. Vink de toestemming en **Passieve beveiligingscontrole** aan. Deze route toont de headers en cookie-attributen met een screenshot van de pagina. Gebruik `npm run lab:verify` voor de dossier- en afmeldproeven.

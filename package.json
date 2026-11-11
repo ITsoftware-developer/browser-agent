@@ -1,1 +1,1 @@
-{"name":"browser-agent","version":"0.1.0","private":true,"type":"module","scripts":{"start":"node server.mjs","test":"node --test"},"dependencies":{"playwright":"^1.58.2"}}
+{"name":"browser-agent","version":"0.1.0","private":true,"type":"module","scripts":{"start":"node server.mjs","test":"node --test","lab":"node security-lab/server.mjs","lab:verify":"node security-lab/verify.mjs"},"dependencies":{"playwright":"^1.58.2"}}
