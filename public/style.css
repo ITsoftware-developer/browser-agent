@@ -147,7 +147,7 @@ dialog::backdrop { background: #10121acc; }
 #security-scope p { margin: 0 0 8px; }
 #security-scope h3 { margin: 0; font-size: .85rem; }
 #security-scope ul { padding-left: 18px; margin: 5px 0 0; color: var(--muted); }
-#security-details summary, #active-security-report summary { cursor: pointer; font-weight: 600; }
+#security-details summary, #active-security-report summary, #target-security-history summary { cursor: pointer; font-weight: 600; }
 #security-checks, #active-security-checks {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
@@ -177,6 +177,19 @@ dialog::backdrop { background: #10121acc; }
 #active-security-cookie-observations section, #active-security-explanation { padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; }
 #active-security-explanation { margin-top: 12px; }
 #active-security-explanation p { white-space: pre-wrap; overflow-wrap: anywhere; }
+#active-security-profile { overflow-wrap: anywhere; }
+#active-security-checks h4 { margin: 10px 0 0; }
+#security-comparison, #security-history, #target-security-history { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; }
+#security-comparison-checks, #security-history-runs, #target-security-history-runs { display: grid; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; }
+#security-comparison-checks li, .security-history-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+:is(#security-history-runs, #target-security-history-runs) > li { padding: 8px 0; border-top: 1px solid var(--border); }
+:is(#security-history-runs, #target-security-history-runs) > li[aria-current=true] { color: var(--muted); }
+:is(#security-history-runs, #target-security-history-runs) p { margin-bottom: 0; overflow-wrap: anywhere; }
+#security-history-status:empty, #target-security-history-status:empty { display: none; }
+#target-security-history { margin: 8px 0 12px; font-size: .83rem; }
+#target-security-history-runs { max-height: 18rem; overflow: auto; }
+#security-comparison-checks .badge:is([data-state=new], [data-state=reappeared]) { color: #ffb4ba; background: #4b2936; }
+#security-comparison-checks .badge[data-state=resolved] { color: #a0f2cb; background: #1f4238; }
 
 @media (min-width: 1161px) {
   .dashboard .preview { position: sticky; top: 16px; }

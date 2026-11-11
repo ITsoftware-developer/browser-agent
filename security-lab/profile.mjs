@@ -27,5 +27,37 @@ export function configuredLabOrigin(input) {
 export function labProfile(input) {
   const url = loopbackUrl(input);
   if (!url || !Object.hasOwn(sessionCookies, url.pathname)) return null;
-  return { origin: url.origin, basePath: url.pathname, records, cookieName: sessionCookies[url.pathname] };
+  const entryPath = url.pathname;
+  const loginPath = `${entryPath}/session`;
+  const logoutPath = `${entryPath}/logout`;
+  function account(user, label) {
+    const record = records[user];
+    return {
+      label,
+      login: { path: loginPath, body: { user }, status: 201 },
+      record: { path: `${entryPath}/records/${record.id}`, match: { ...record } },
+    };
+  }
+  const accounts = { a: account('alice', 'Alice'), b: account('bob', 'Bob') };
+  return {
+    id: `lab-${entryPath.slice(1)}`,
+    name: entryPath === '/fixed' ? 'Security Lab · Herstelde variant' : 'Security Lab · Kwetsbare variant',
+    origin: url.origin,
+    entryPath,
+    approval: {
+      reference: 'Ingebouwd lokaal Security Lab',
+      expiresAt: null,
+      proof: { path: entryPath, kind: 'header', header: 'x-browser-agent-security-lab', value: '1' },
+    },
+    accounts,
+    session: { cookieName: sessionCookies[entryPath], logoutPath, logoutStatus: 204, anonymousStatus: 401 },
+    authorization: { deniedStatus: 403 },
+    allowedRequests: [
+      { method: 'GET', path: entryPath },
+      { method: 'POST', path: loginPath },
+      { method: 'GET', path: accounts.a.record.path },
+      { method: 'GET', path: accounts.b.record.path },
+      { method: 'POST', path: logoutPath },
+    ],
+  };
 }

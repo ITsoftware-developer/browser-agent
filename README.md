@@ -77,3 +77,22 @@ node server.mjs
 Plak `http://127.0.0.1:4327/vulnerable` of `http://127.0.0.1:4327/fixed` in het dashboard. Vink de toestemming en **Actieve labcontrole** aan en klik op **Start labcontrole**. De actieve controles gelden voor deze twee routes op het ingestelde loopbackadres. Bij gebruik van strikte DNS-verificatie is deze lokale optie afgeschermd.
 
 Het rapport laat de dossieropvragen, afmeldproef en waargenomen cookie-attributen per browsercontext zien. Een geconfigureerd taalmodel kan bij bevestigde bevindingen uitleg toevoegen op basis van de vastgelegde HTTP-waarnemingen. De testuitkomst wordt berekend uit het browserbewijs. Voor headers en cookie-attributen van de documentrespons gebruik je **Passieve beveiligingscontrole**.
+
+## Actieve beveiligingscontrole op je eigen testomgeving
+
+1. Kopieer `examples/security-profile.example.json` naar `security-profiles.local.json`. Pas de origin, profiel-URL, fictieve testaccounts, routes en verwachte uitkomsten aan. Bewaar dit bestand lokaal, want het bevat de inloggegevens van de testaccounts.
+2. Leg de toestemming vast met `approval.reference` en een vervaltijd in `approval.expiresAt`. Laat de testapp op `approval.proof.path` HTTP 200 teruggeven met exact de unieke tekst uit `approval.proof.value` als body, zonder afsluitende newline.
+3. Neem de exacte HTTP-methode en het pad van de bewijsroute, beide recordroutes, de loginroutes en de uitlogroute op in `allowedRequests`. De engine gebruikt POST met het opgegeven JSON-object voor login, POST zonder body voor uitloggen en GET voor het bewijs en de fictieve JSON-records. Elk account moet het eigen record kunnen ophalen met HTTP 200. Gebruik onderscheidende velden in `match` om te controleren welk record de browser heeft ontvangen.
+
+Start Browser Agent vanuit de projectmap met het ingestelde profielbestand.
+
+```powershell
+$env:ACTIVE_SECURITY_PROFILES_FILE = (Resolve-Path .\security-profiles.local.json).Path
+node server.mjs
+```
+
+Plak de exacte combinatie van `origin` en `entryPath` in het dashboard. Voor een externe HTTPS-origin moet je ook het DNS TXT-record verifiëren in dezelfde browsersessie. Voor lokale ontwikkeling ondersteunt het profiel een expliciete `http://127.0.0.1:<poort>`-origin zolang strikte DNS-modus uitstaat. Vink **Actieve beveiligingscontrole** en de toestemming aan, en klik op **Start beveiligingscontrole**.
+
+De browser gebruikt aparte contexten voor de testaccounts en controleert het bewijs van toestemming voordat hij inlogt. Hij voert uitsluitend de vastgelegde verzoeken uit binnen de tijd- en verzoeklimieten. Rapporten bevatten HTTP-statussen, recordvergelijkingen, cookie-attributen en hersteladvies. Inloggegevens, cookiewaarden en ruwe antwoordteksten blijven buiten het rapport en het taalmodel.
+
+Onder **Beveiligingsgeschiedenis** kun je vanuit dezelfde browsersessie eerdere rapporten openen. Vergelijkingen gebruiken dezelfde profielrevisie, zodat een gewijzigde scope of verwachting geen schijnbare fix oplevert. Bij een onbesliste controle blijft de laatst vastgestelde uitkomst beschikbaar voor een latere vergelijking.

@@ -11,6 +11,8 @@ import { createDomainVerification } from './domain-verification.mjs';
 import { redactReportValue, reportOwner } from './report-privacy.mjs';
 import { configuredLabOrigin, labProfile } from './security-lab/profile.mjs';
 import { runLabChecks } from './security-lab/run.mjs';
+import { loadSecurityProfiles, profileSummary } from './security-profiles.mjs';
+import { compareSecurityRuns, readSecurityHistory } from './security-history.mjs';
 
 const port = Number(process.env.PORT || 4317);
 let base = `http://127.0.0.1:${port}`;
@@ -20,6 +22,9 @@ const endpoint = process.env.LLM_ENDPOINT;
 const aiOrigins = model && endpoint ? [...allowedOrigins] : [];
 const requireDomainVerification = process.env.REQUIRE_DOMAIN_VERIFICATION === '1';
 const securityLabOrigin = requireDomainVerification ? null : configuredLabOrigin(process.env.SECURITY_LAB_ORIGIN);
+const activeProfiles = new Map((await loadSecurityProfiles(process.env.ACTIVE_SECURITY_PROFILES_FILE))
+  .map(profile => [profile.id, profile]));
+const runsRoot = new URL('runs/', import.meta.url);
 const domains = createDomainVerification();
 const configuredModelTimeout = Number(process.env.LLM_TIMEOUT_MS);
 const modelTimeoutMs = Number.isInteger(configuredModelTimeout) && configuredModelTimeout >= 1 &&
@@ -52,6 +57,11 @@ function appendRunError(run, errorCode, detail) {
   });
 }
 
+function eligibleProfile(profile) {
+  return Date.parse(profile.approval.expiresAt) > Date.now() &&
+    (!requireDomainVerification || profile.origin.startsWith('https:'));
+}
+
 async function readJson(request) {
   let body = '';
   for await (const chunk of request) {
@@ -81,13 +91,21 @@ async function start(input, response, owner) {
   }
   const demo = target.origin === base && target.pathname === '/demo';
   const activeRequested = input.activeSecurity === true;
-  const profile = activeRequested && target.origin === securityLabOrigin ? labProfile(target) : null;
+  const requestedProfile = activeRequested && Object.hasOwn(input, 'activeProfileId');
+  const configured = requestedProfile ? activeProfiles.get(input.activeProfileId) : undefined;
+  let profile;
+  if (configured && eligibleProfile(configured) && profileSummary(configured).url === target.href) {
+    profile = configured;
+  } else if (activeRequested && !requestedProfile && target.origin === securityLabOrigin) {
+    profile = labProfile(target);
+  }
   if (activeRequested && !profile) {
-    return json(response, 403, { error: 'Actieve controles zijn beschikbaar voor de ingestelde lokale labvarianten.' });
+    return json(response, 403, { error: 'Actieve controles vereisen een geldig goedgekeurd profiel voor deze exacte test-URL.' });
   }
   const securityRequested = !profile && !demo && input.security === true;
   const mode = profile ? 'lab' : demo ? 'demo' : !securityRequested && aiOrigins.includes(target.origin) ? 'ai' : 'inspection';
-  const verifiedOrigins = !demo && requireDomainVerification ? new Set(domains.verifiedOrigins(owner)) : undefined;
+  const requireVerifiedOrigin = !demo && (requireDomainVerification || profile?.origin.startsWith('https:'));
+  const verifiedOrigins = requireVerifiedOrigin ? new Set(domains.verifiedOrigins(owner)) : undefined;
   const publicNetwork = Boolean(verifiedOrigins) || (mode === 'inspection' && !allowedOrigins.has(target.origin));
   if (publicNetwork && !isPublicUrl(target)) {
     return json(response, 400, { error: 'Gebruik een publieke website-URL. Een lokale testsite kun je instellen via TEST_ORIGINS.' });
@@ -107,10 +125,11 @@ async function start(input, response, owner) {
   }
 
   const id = randomUUID();
-  const directory = new URL(`runs/${id}/`, import.meta.url);
-  const runTask = profile ? 'Actieve autorisatie- en sessiecontrole in Security Lab'
+  const directory = new URL(`${id}/`, runsRoot);
+  const runTask = profile ? 'Actieve autorisatie- en sessiecontrole'
     : mode === 'inspection' ? 'Automatische websitecontrole' : task;
   const run = { id, url: target.href, task: runTask, mode, status: 'running', steps: [] };
+  if (configured && profile) run.activeProfile = profileSummary(profile);
   if (securityRequested) run.securityRequested = true;
   if (!profile && !demo && expectations.length) run.expectations = expectations;
   activeRun = { owner, run };
@@ -141,6 +160,15 @@ async function start(input, response, owner) {
     outcome = getRunOutcome({ ...run, status: 'error' });
   }
   if (run.securityRequested) run.security ??= buildSecurityReport(null);
+  if (run.activeSecurity?.profile) {
+    run.finishedAt = new Date().toISOString();
+    try {
+      const history = await readSecurityHistory(runsRoot, owner, run.activeSecurity.profile.id);
+      run.activeSecurity.comparison = compareSecurityRuns(run.activeSecurity, history);
+    } catch (error) {
+      console.error(redactReportValue('', error.message));
+    }
+  }
   try {
     await writeFile(new URL('report.json', directory), JSON.stringify({ ...run, ...outcome }, redactReportValue, 2));
   } catch (error) {
@@ -159,7 +187,8 @@ const server = createServer(async (request, response) => {
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Cache-Control', 'no-store');
   if (request.headers.host !== new URL(base).host) return json(response, 403, { error: 'Gebruik het lokale adres.' });
-  const path = new URL(request.url, base).pathname;
+  const requestUrl = new URL(request.url, base);
+  const path = requestUrl.pathname;
   try {
     if (request.method === 'POST' && ['/api/runs', '/api/domain/challenge', '/api/domain/verify'].includes(path)) {
       if (request.headers.origin && request.headers.origin !== base) return json(response, 403, { error: 'Ongeldige herkomst.' });
@@ -175,13 +204,22 @@ const server = createServer(async (request, response) => {
         const owner = reportOwner(request, response);
         const capabilities = { aiOrigins, requireDomainVerification, verifiedOrigins: domains.verifiedOrigins(owner) };
         if (securityLabOrigin) capabilities.securityLabOrigin = securityLabOrigin;
+        const profiles = [...activeProfiles.values()].filter(eligibleProfile).map(profileSummary);
+        if (profiles.length) capabilities.activeSecurityProfiles = profiles;
         return json(response, 200, capabilities);
+      }
+      if (path === '/api/security/history') {
+        const owner = reportOwner(request);
+        const profileId = requestUrl.searchParams.get('profileId');
+        if (!owner || !profileId || profileId.length > 64) return json(response, 200, { runs: [] });
+        const runs = await readSecurityHistory(runsRoot, owner, profileId);
+        return json(response, 200, { runs: runs.slice(0, 25) }, redactReportValue);
       }
       const match = /^\/api\/runs\/([a-f0-9-]{36})(?:\/(\d+\.png))?$/.exec(path);
       if (match) {
         const owner = reportOwner(request);
         const current = [activeRun, lastRun].find(entry => entry?.run.id === match[1]);
-        const directory = new URL(`runs/${match[1]}/`, import.meta.url);
+        const directory = new URL(`${match[1]}/`, runsRoot);
         if (!owner || owner !== (current?.owner ?? await readFile(new URL('owner', directory), 'utf8'))) {
           return json(response, 404, { error: 'Rapport niet gevonden.' });
         }

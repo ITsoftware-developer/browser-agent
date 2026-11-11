@@ -1,0 +1,56 @@
+[
+  {
+    "id": "staging-security",
+    "name": "Beveiligingscontrole van staging",
+    "origin": "https://staging.example.com",
+    "entryPath": "/security-test",
+    "approval": {
+      "reference": "SEC-123",
+      "expiresAt": "2035-06-01T12:00:00Z",
+      "proof": {
+        "path": "/.well-known/browser-agent",
+        "value": "voorbeeld-vervang-door-unieke-waarde"
+      }
+    },
+    "accounts": {
+      "a": {
+        "label": "Testaccount A",
+        "login": {
+          "path": "/api/session",
+          "body": { "username": "fixture-a", "password": "vervang-dit-wachtwoord" },
+          "status": 201
+        },
+        "record": {
+          "path": "/api/records/fixture-a",
+          "match": { "id": "fixture-a", "owner": "fixture-a" }
+        }
+      },
+      "b": {
+        "label": "Testaccount B",
+        "login": {
+          "path": "/api/session",
+          "body": { "username": "fixture-b", "password": "vervang-dit-wachtwoord" },
+          "status": 201
+        },
+        "record": {
+          "path": "/api/records/fixture-b",
+          "match": { "id": "fixture-b", "owner": "fixture-b" }
+        }
+      }
+    },
+    "session": {
+      "cookieName": "__Host-session",
+      "logoutPath": "/api/logout",
+      "logoutStatus": 204,
+      "anonymousStatus": 401
+    },
+    "authorization": { "deniedStatus": 403 },
+    "allowedRequests": [
+      { "method": "GET", "path": "/.well-known/browser-agent" },
+      { "method": "GET", "path": "/api/records/fixture-a" },
+      { "method": "GET", "path": "/api/records/fixture-b" },
+      { "method": "POST", "path": "/api/session" },
+      { "method": "POST", "path": "/api/logout" }
+    ]
+  }
+]

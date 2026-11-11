@@ -1,7 +1,9 @@
 import { AgentError, requestModel } from '../runner.mjs';
+import { resolvePublicAddress } from '../public-network.mjs';
+import { profileRevision, profileSummary } from '../security-profiles.mjs';
 import { runActiveSecurity } from './browser-probes.mjs';
 
-const stepStatuses = { confirmed: 'failed', protected: 'passed', inconclusive: 'error' };
+const stepStatuses = { confirmed: 'failed', protected: 'passed', inconclusive: 'error', not_tested: 'skipped' };
 
 function evidenceText(check) {
   const result = check.id === 'object-authorization' ? check.observed.cross : check.observed.replay;
@@ -12,12 +14,25 @@ function evidenceText(check) {
 }
 
 export async function runLabChecks({ run, profile, model, endpoint, modelTimeoutMs = 5000 }) {
+  const profileMetadata = { ...profileSummary(profile), revision: profileRevision(profile),
+    approvalReference: profile.approval.reference };
   let report;
   try {
-    report = await runActiveSecurity(profile);
+    const pinnedAddress = profile.origin.startsWith('https:') ? await resolvePublicAddress(profile.origin) : undefined;
+    report = await runActiveSecurity(profile, { pinnedAddress });
   } catch (error) {
-    throw new AgentError('lab_unavailable', 'Het geconfigureerde Security Lab kon niet worden geverifieerd.', { cause: error });
+    run.activeSecurity = {
+      profile: profileMetadata,
+      checks: [
+        { id: 'object-authorization', title: 'Toegang tot het record van een andere gebruiker', status: 'not_tested',
+          route: `GET ${profile.accounts.a.record.path}` },
+        { id: 'logout-replay', title: 'Hergebruik van de sessie na uitloggen', status: 'not_tested',
+          route: `POST ${profile.session.logoutPath}` },
+      ],
+    };
+    throw new AgentError('active_security_unavailable', 'Het goedgekeurde testdoel of het bewijs van toestemming kon niet worden vastgesteld.', { cause: error });
   }
+  report.profile = profileMetadata;
   run.activeSecurity = report;
   for (const check of report.checks) {
     const sequence = run.steps.length + 1;
@@ -29,10 +44,10 @@ export async function runLabChecks({ run, profile, model, endpoint, modelTimeout
       detail: evidenceText(check),
     });
   }
-  const inconclusive = report.checks.some(check => check.status === 'inconclusive');
+  const inconclusive = report.checks.some(check => check.status === 'inconclusive' || check.status === 'not_tested');
   run.coverage = inconclusive ? 'partial' : 'full';
-  if (inconclusive) run.incompleteReason = 'Voor een of meer labcontroles ontbreekt beslissend browserbewijs.';
-  run.summary = 'Autorisatie en sessie-intrekking zijn getest met fictieve accounts in het lokale Security Lab.';
+  if (inconclusive) run.incompleteReason = 'Voor een of meer beveiligingscontroles ontbreekt beslissend browserbewijs.';
+  run.summary = 'Autorisatie en sessie-intrekking zijn beoordeeld met de fictieve accounts van het goedgekeurde testprofiel.';
 
   const findings = report.checks.filter(check => check.status === 'confirmed');
   if (model && endpoint && findings.length) {
@@ -40,7 +55,7 @@ export async function runLabChecks({ run, profile, model, endpoint, modelTimeout
       const explanation = await requestModel({ model, endpoint, modelTimeoutMs: Math.min(modelTimeoutMs, 5000) }, [
         {
           role: 'system',
-          content: 'Leg in het Nederlands uit wat de vastgelegde HTTP-bewijzen in dit fictieve lab betekenen. Gebruik hoogstens 120 woorden. Beperk je tot het aangeleverde bewijs en algemeen hersteladvies.',
+          content: 'Leg in het Nederlands uit wat het vastgelegde browserbewijs voor de testaccounts betekent. Gebruik hoogstens 120 woorden. Beperk je tot de aangeleverde waarnemingen en algemeen hersteladvies.',
         },
         { role: 'user', content: JSON.stringify(findings.map(({ id, observed }) => ({ id, observed }))) },
       ]);

@@ -161,7 +161,9 @@ test('the dashboard measures passive settings and active browser behavior in bot
     assert.equal(report.activeSecurity.browserCookies.alice.scriptVisible, expected === 'confirmed');
     if (expected === 'protected') assert.equal(report.activeSecurity.browserCookies.alice.sameSiteLax, true);
     assert.equal(report.activeSecurity.explanation, expected === 'confirmed' ? modelResponse : undefined);
-    assert.doesNotMatch(JSON.stringify(report), /security_lab_session=|Synthetisch dossier van|[a-f0-9]{48}/);
+    assert.match(report.activeSecurity.profile.revision, /^[a-f0-9]{64}$/);
+    const reportWithoutRevision = JSON.stringify(report, (key, value) => key === 'revision' ? undefined : value);
+    assert.doesNotMatch(reportWithoutRevision, /security_lab_session=|Synthetisch dossier van|[a-f0-9]{48}/);
     await activePanel.waitFor({ state: 'visible' });
     await activePanel.getByRole('heading', { name: report.activeSecurity.checks[0].title, exact: true }).waitFor();
     await activePanel.getByText('Waarnemingen en reproduceerstappen', { exact: true }).first().click();

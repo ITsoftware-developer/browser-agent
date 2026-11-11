@@ -80,6 +80,13 @@ async function publicAddresses(host, lookup, signal) {
   return addresses;
 }
 
+export async function resolvePublicAddress(input) {
+  if (!isPublicUrl(input)) throw publicAddressRequired();
+  const url = new URL(input);
+  const addresses = await publicAddresses(hostnameOf(url), lookupDns, AbortSignal.timeout(4000));
+  return (addresses.find(candidate => candidate.family === 4) ?? addresses[0]).address;
+}
+
 const requestHeaders = new Set([
   'accept', 'accept-language', 'cache-control', 'origin', 'range', 'user-agent',
 ]);

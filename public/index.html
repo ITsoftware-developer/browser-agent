@@ -45,7 +45,8 @@
       </details>
     </section>
     <section id="active-security-report" class="panel security-report" aria-labelledby="active-security-heading" hidden>
-      <h2 id="active-security-heading">Actieve labresultaten</h2>
+      <h2 id="active-security-heading" tabindex="-1">Actieve labresultaten</h2>
+      <p id="active-security-profile" hidden></p>
       <p id="active-security-status" role="status"></p>
       <ul id="active-security-checks" hidden></ul>
       <details id="active-security-cookies" hidden>
@@ -56,6 +57,16 @@
         <h3>AI-uitleg</h3>
         <p id="active-security-explanation-text"></p>
       </div>
+      <section id="security-comparison" aria-labelledby="security-comparison-heading" hidden>
+        <h3 id="security-comparison-heading">Vergelijking met eerdere tests</h3>
+        <button type="button" id="security-comparison-baseline" class="preset" hidden>Bekijk vorige test</button>
+        <ul id="security-comparison-checks"></ul>
+      </section>
+      <details id="security-history" hidden>
+        <summary>Beveiligingsgeschiedenis</summary>
+        <p id="security-history-status" role="status"></p>
+        <ul id="security-history-runs"></ul>
+      </details>
     </section>
     <div class="layout">
       <section class="panel settings" aria-labelledby="settings-heading">
@@ -103,8 +114,14 @@
             </select>
           </fieldset>
           <label id="active-security-option" class="check" hidden>
-            <input id="active-security-enabled" type="checkbox" disabled> Actieve labcontrole
+            <input id="active-security-enabled" type="checkbox" disabled>
+            <span id="active-security-label">Actieve labcontrole</span>
           </label>
+          <details id="target-security-history" hidden>
+            <summary>Beveiligingsgeschiedenis openen</summary>
+            <p id="target-security-history-status" role="status"></p>
+            <ul id="target-security-history-runs"></ul>
+          </details>
           <label id="security-option" class="check" hidden>
             <input id="security-enabled" type="checkbox" disabled> Passieve beveiligingscontrole
           </label>
