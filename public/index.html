@@ -7,16 +7,30 @@
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" type="module"></script>
 </head>
-<body>
+<body class="dashboard">
   <header class="topbar"><div class="wrap brand"><span class="mark" aria-hidden="true">◈</span> Browser Agent <span class="local">Lokaal</span></div></header>
   <main class="wrap">
-    <section class="intro">
+    <div class="page-heading">
       <h1>Website testen</h1>
-      <p>Laat de agent gebruikersflows doorlopen en bekijk waar ze vastlopen.</p>
-    </section>
+      <span class="badge" id="status" aria-live="polite">Geen test gestart</span>
+    </div>
+    <dl class="metrics" aria-label="Testoverzicht">
+      <div class="metric" data-metric="passed">
+        <dt>Geslaagde controles</dt>
+        <dd id="passed-count">0</dd>
+      </div>
+      <div class="metric" data-metric="failed">
+        <dt>Mislukte controles</dt>
+        <dd id="failed-count">0</dd>
+      </div>
+      <div class="metric" data-metric="finding">
+        <dt>AI-bevindingen</dt>
+        <dd id="finding-count">0</dd>
+      </div>
+    </dl>
     <div class="layout">
-      <section class="panel">
-        <h2>Nieuwe test</h2>
+      <section class="panel settings" aria-labelledby="settings-heading">
+        <h2 id="settings-heading">Nieuwe test</h2>
         <div class="presets" aria-label="Demovoorbeelden">
           <button type="button" class="preset selected" data-demo="bug" aria-pressed="true">Demo met fout</button>
           <button type="button" class="preset" data-demo="clean" aria-pressed="false">Werkende demo</button>
@@ -37,14 +51,35 @@
             </select>
           </fieldset>
           <label class="check"><input id="authorized" type="checkbox" required> Ik heb toestemming om deze website te testen.</label>
-          <button class="primary" id="start">Start AI-test <span aria-hidden="true">→</span></button>
+          <button class="primary" id="start"><span id="start-label">Start demotest</span> <span aria-hidden="true">→</span></button>
           <p id="error" role="alert" hidden></p>
         </form>
       </section>
-      <section class="panel report">
-        <div class="report-header"><h2>Testrapport</h2><span class="badge" id="status" aria-live="polite">Geen test gestart</span></div>
-        <div id="empty" class="empty"><span aria-hidden="true">◎</span><p>Teststappen, screenshots en bevindingen verschijnen hier zodra je een test start.</p></div>
+
+      <section class="panel preview" aria-labelledby="preview-heading">
+        <div class="panel-heading">
+          <h2 id="preview-heading">Browserpreview</h2>
+          <button type="button" class="preset" id="follow-latest" aria-pressed="true" disabled>Volg nieuwste stap</button>
+        </div>
+        <figure class="preview-frame">
+          <div class="preview-toolbar">
+            <span class="browser-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+            <p id="preview-url">Geen pagina geopend</p>
+          </div>
+          <div id="preview-screen" class="preview-screen">
+            <img id="preview-image" alt="Screenshot van de testpagina" hidden>
+            <p id="preview-empty">Het screenshot verschijnt na de eerste teststap.</p>
+          </div>
+          <figcaption id="preview-caption" aria-live="polite"></figcaption>
+        </figure>
+      </section>
+
+      <section class="panel report" aria-labelledby="timeline-heading">
+        <h2 id="timeline-heading">Testtijdlijn</h2>
+        <p id="empty" class="timeline-empty">De teststappen verschijnen hier zodra de test start.</p>
         <p id="summary" aria-live="polite" hidden></p>
+        <p id="run-counts" hidden></p>
+        <p id="coverage-note" hidden>Geen functionele controles geverifieerd.</p>
         <ol id="steps"></ol>
         <button type="button" id="export" class="preset" hidden>Download rapport</button>
       </section>

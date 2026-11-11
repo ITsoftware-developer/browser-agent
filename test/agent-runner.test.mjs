@@ -97,7 +97,10 @@ test('model output gets one corrective retry on the same browser observation', a
   assert.deepEqual(requests[1].input, requests[0].input);
   assert.equal(requests[2].correction, undefined);
   assert.equal(run.steps.filter(step => step.status === 'observed').length, 1);
-  assert.equal(getRunOutcome(run).status, 'completed');
+  const outcome = getRunOutcome(run);
+  assert.equal(outcome.status, 'completed');
+  assert.equal(outcome.coverage, 'unknown');
+  assert.equal(outcome.verifiedChecks, 0);
 });
 
 test('an invalid element index exhausts the corrective retry without executing a browser action', async t => {
@@ -218,6 +221,66 @@ test('a blocked POST produces a network diagnostic without a verified website fa
   const outcome = getRunOutcome(run);
   assert.equal(outcome.status, 'incomplete');
   assert.equal(outcome.verifiedFailures, 0);
+});
+
+test('a POST that starts after the click is recorded remains a standalone network warning', async t => {
+  const releasePost = Promise.withResolvers();
+  const postSettled = Promise.withResolvers();
+  const expectation = { ...absentText, expected: false };
+  let submitRequests = 0;
+  const { execute, run } = await fixture(t, async ({ history }) => {
+    if (history.length === 0) return { action: 'click', index: 0 };
+    if (history.length === 1) {
+      releasePost.resolve();
+      await postSettled.promise;
+      return { action: 'assert', ...expectation };
+    }
+    return finish;
+  }, {
+    expectations: [expectation],
+    modelTimeoutMs: 6000,
+    html: `<button onclick="submitLater()">Probeer</button><script>
+      async function submitLater() {
+        await fetch('/release-post');
+        await fetch('/delayed-submit', { method: 'POST' }).catch(() => {});
+        await fetch('/post-settled');
+      }
+    </script>`,
+    handleSiteRequest(request, response) {
+      if (request.url === '/release-post') {
+        void releasePost.promise.then(() => response.writeHead(204).end());
+        return true;
+      }
+      if (request.url === '/delayed-submit') {
+        submitRequests++;
+        response.writeHead(204).end();
+        return true;
+      }
+      if (request.url === '/post-settled') {
+        response.writeHead(204).end();
+        postSettled.resolve();
+        return true;
+      }
+      return false;
+    },
+  });
+  await execute();
+  assert.equal(submitRequests, 0);
+  assert.equal(run.steps[1].status, 'observed');
+  const check = run.steps.find(step => step.check);
+  assert.equal(check.status, 'passed');
+  assert.equal(check.actual, false);
+  const warning = run.steps.find(step => step.errorCode === 'network_request_limited');
+  assert.equal(warning.status, 'warning');
+  const request = warning.requests.find(request => request.path === '/delayed-submit');
+  assert.equal(request.method, 'POST');
+  assert.equal(request.relatedStepId, undefined);
+  const outcome = getRunOutcome(run);
+  assert.equal(outcome.status, 'completed_with_issues');
+  assert.equal(outcome.coverage, 'full');
+  assert.equal(outcome.verifiedChecks, 1);
+  assert.equal(outcome.verifiedFailures, 0);
+  assert.equal(outcome.technicalErrors, 0);
 });
 
 test('an unrelated blocked GET does not invalidate a matching absence assertion', async t => {

@@ -23,8 +23,21 @@ function waitForReport(page) {
     response.ok() && (await response.json()).status !== 'running');
 }
 
-test('dashboard runs the demo and distinguishes completed AI runs from findings to review', async t => {
+async function waitForPreview(page, screenshot) {
+  assert.ok(screenshot);
+  const src = new URL(screenshot, page.url()).href;
+  await page.waitForFunction(expected => {
+    const image = document.querySelector('#preview-image');
+    return !image.hidden && image.src === expected && image.complete && image.naturalWidth > 0;
+  }, src);
+  await page.locator('#preview-image').waitFor({ state: 'visible' });
+  return src;
+}
+
+test('dashboard previews live and pinned steps and reports demo and AI results', async t => {
   const navigationDelayMs = 180;
+  const assertionGate = Promise.withResolvers();
+  t.after(() => assertionGate.resolve());
   let observedClick;
   let offeredEvidence;
   let otherRunScreenshot;
@@ -46,6 +59,7 @@ test('dashboard runs the demo and distinguishes completed AI runs from findings 
       } else if (input.history.length === 1) {
         action = { action: 'click', index: 1 };
       } else if (input.history.length === 2 && input.expectations.length) {
+        await assertionGate.promise;
         action = { action: 'assert', ...input.expectations[0] };
       } else {
         action = {
@@ -85,7 +99,7 @@ test('dashboard runs the demo and distinguishes completed AI runs from findings 
 
   const server = spawn(process.execPath, ['server.mjs'], {
     env: { ...process.env, PORT: '0', TEST_ORIGINS: fixtureOrigin, LLM_ENDPOINT: `${fixtureOrigin}/model`,
-      LLM_MODEL: 'fixture', LLM_TIMEOUT_MS: '2000' },
+      LLM_MODEL: 'fixture', LLM_TIMEOUT_MS: '5000' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   t.after(() => server.kill());
@@ -96,15 +110,24 @@ test('dashboard runs the demo and distinguishes completed AI runs from findings 
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 390, height: 850 } });
   await page.goto(origin);
+  await page.locator('#preview-image').waitFor({ state: 'hidden' });
+  await page.getByText('Het screenshot verschijnt na de eerste teststap.', { exact: true }).waitFor();
   await page.getByRole('checkbox').check();
+  const timeline = page.locator('#steps');
+  const screenshots = timeline.getByRole('link', { name: /Bekijk screenshot/ });
+  const openStep = timeline.getByRole('button', { name: 'Website openen', exact: true });
+  const followLatest = page.getByRole('button', { name: 'Volg nieuwste stap', exact: true });
+  const demoStart = page.getByRole('button', { name: 'Start demotest', exact: true });
+  const aiStart = page.getByRole('button', { name: 'Start AI-test', exact: true });
+  let firstDemoPreview;
 
   for (const [preset, result] of [['Demo met fout', 'Demo · Fout gevonden'], ['Werkende demo', 'Demo · Afgerond']]) {
     await page.getByRole('button', { name: preset }).click();
-    await page.getByRole('button', { name: 'Start AI-test' }).click();
+    await demoStart.click();
     await page.getByText(`${result} · Dekking volledig`, { exact: true }).waitFor();
-    assert.equal(await page.locator('#steps li').count(), 6);
-    const screenshots = page.getByRole('link', { name: /Bekijk screenshot/ });
+    assert.equal(await timeline.locator('li').count(), 6);
     assert.equal(await screenshots.count(), 6);
+    const latest = await waitForPreview(page, await screenshots.last().getAttribute('href'));
     const screenshotUrl = await screenshots.nth(4).getAttribute('href');
     const screenshot = await page.request.get(new URL(screenshotUrl, origin).href);
     assert.equal(screenshot.headers()['content-type'], 'image/png');
@@ -121,6 +144,11 @@ test('dashboard runs the demo and distinguishes completed AI runs from findings 
       assert.match(bug.expected, /1 artikel/);
       assert.match(bug.actual, /0 artikelen/);
       otherRunScreenshot = new URL(bug.screenshot).pathname;
+      await openStep.click();
+      firstDemoPreview = await waitForPreview(page, await screenshots.first().getAttribute('href'));
+      assert.notEqual(firstDemoPreview, latest);
+    } else {
+      assert.notEqual(latest, firstDemoPreview);
     }
   }
 
@@ -128,17 +156,37 @@ test('dashboard runs the demo and distinguishes completed AI runs from findings 
   await page.getByLabel('Testopdracht').fill('Test het veld en de knop.');
   const expectedText = page.getByLabel('Te controleren tekst');
   await expectedText.fill('Opgeslagen in de demo');
-  await page.getByRole('button', { name: 'Start AI-test' }).click();
+  let pinnedScreenshot;
+  try {
+    await aiStart.click();
+    await page.locator('#status[data-state="running"]').waitFor();
+    await waitForPreview(page, await screenshots.nth(2).getAttribute('href'));
+    assert.equal(await page.locator('#status').getAttribute('data-state'), 'running');
+    await openStep.click();
+    pinnedScreenshot = await screenshots.first().getAttribute('href');
+    await waitForPreview(page, pinnedScreenshot);
+  } finally {
+    assertionGate.resolve();
+  }
   await page.getByText('AI · Afgerond · Dekking volledig', { exact: true }).waitFor();
   await page.getByText('De testknop werkt.', { exact: true }).waitFor();
   await page.getByText('Gezien · Zichtbaar', { exact: true }).waitFor();
-  assert.equal(await page.locator('#steps li').count(), 4);
+  assert.equal(await timeline.locator('li').count(), 4);
+  await waitForPreview(page, pinnedScreenshot);
+  await followLatest.click();
+  await waitForPreview(page, await screenshots.last().getAttribute('href'));
+
+  await expectedText.clear();
+  await aiStart.click();
+  await page.getByText('AI · Afgerond · Dekking onbekend', { exact: true }).waitFor();
+  await page.getByText('Geen functionele controles geverifieerd.', { exact: true }).waitFor();
+  assert.equal(await timeline.locator('li').count(), 3);
+  await waitForPreview(page, await screenshots.last().getAttribute('href'));
 
   await page.getByLabel('Website-URL').fill(`${fixtureOrigin}/review`);
-  await expectedText.clear();
   const [reviewResponse] = await Promise.all([
     waitForReport(page),
-    page.getByRole('button', { name: 'Start AI-test' }).click(),
+    aiStart.click(),
   ]);
   const report = await reviewResponse.json();
   assert.equal(report.status, 'review');
@@ -168,6 +216,19 @@ test('dashboard runs the demo and distinguishes completed AI runs from findings 
   const proof = await page.request.get(new URL(evidence.screenshot, origin).href);
   assert.equal(proof.headers()['content-type'], 'image/png');
   assert.equal(await page.locator('#status').getAttribute('data-state'), 'review');
+  await waitForPreview(page, evidence.screenshot);
+  assert.match(await page.locator('#preview-url').textContent(), /\/review/);
+  await openStep.click();
+  await waitForPreview(page, report.steps[0].screenshot);
+  await findingRow.getByRole('button', { name: findings[0].title, exact: true }).click();
+  await waitForPreview(page, evidence.screenshot);
+  assert.match(await page.locator('#preview-caption').textContent(), /Screenshot uit stap 3 · AI-selectie, te beoordelen/);
+  await timeline.getByRole('button', { name: findings[1].title, exact: true }).click();
+  await page.locator('#preview-image').waitFor({ state: 'hidden' });
+  await followLatest.click();
+  await waitForPreview(page, evidence.screenshot);
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
+    'the mobile dashboard has no horizontal overflow');
 
   const [download] = await Promise.all([
     page.waitForEvent('download'),
@@ -184,7 +245,7 @@ test('dashboard runs the demo and distinguishes completed AI runs from findings 
   await page.getByLabel('Website-URL').fill(`${fixtureOrigin}/timeout`);
   const [timeoutResponse] = await Promise.all([
     waitForReport(page),
-    page.getByRole('button', { name: 'Start AI-test' }).click(),
+    aiStart.click(),
   ]);
   const interrupted = await timeoutResponse.json();
   assert.equal(interrupted.status, 'error');
