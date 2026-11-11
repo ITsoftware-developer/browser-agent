@@ -4,7 +4,7 @@ const cookieNames = new Map([
   ['/vulnerable', 'security_lab_session'],
   ['/fixed', '__Secure-security_lab_session'],
 ]);
-const asvs = 'https://github.com/OWASP/ASVS/blob/v5.0.0_release/5.0/en/';
+const asvs = 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/';
 const authorization = {
   id: 'v5.0.0-8.2.2',
   url: `${asvs}0x17-V8-Authorization.md#v82-general-authorization-design`,

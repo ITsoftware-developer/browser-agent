@@ -164,6 +164,8 @@ test('the dashboard measures passive settings and active browser behavior in bot
     assert.doesNotMatch(JSON.stringify(report), /security_lab_session=|Synthetisch dossier van|[a-f0-9]{48}/);
     await activePanel.waitFor({ state: 'visible' });
     await activePanel.getByRole('heading', { name: report.activeSecurity.checks[0].title, exact: true }).waitFor();
+    await activePanel.getByText('Waarnemingen en reproduceerstappen', { exact: true }).first().click();
+    await activePanel.getByRole('link', { name: /ASVS v5.0.0-8.2.2/ }).waitFor();
     if (expected === 'confirmed') await activePanel.getByText(modelResponse, { exact: true }).waitFor();
   }
   assert.equal(modelInputs.length, 1);
