@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Browser Agent</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <header class="topbar"><div class="wrap brand"><span class="mark" aria-hidden="true">◈</span> Browser Agent <span class="local">Lokaal</span></div></header>
+  <main class="wrap">
+    <section class="intro">
+      <h1>Website testen</h1>
+      <p>Laat de agent gebruikersflows doorlopen en bekijk waar ze vastlopen.</p>
+    </section>
+    <div class="layout">
+      <section class="panel">
+        <h2>Nieuwe test</h2>
+        <div class="presets" aria-label="Demovoorbeelden">
+          <button type="button" class="preset selected" data-demo="bug" aria-pressed="true">Demo met fout</button>
+          <button type="button" class="preset" data-demo="clean" aria-pressed="false">Werkende demo</button>
+        </div>
+        <form id="run-form">
+          <label for="url">Website-URL</label>
+          <input id="url" type="url" required>
+          <label for="task">Testopdracht</label>
+          <textarea id="task" required maxlength="2000" rows="4"></textarea>
+          <fieldset id="expectation" hidden disabled>
+            <legend>Controle (optioneel)</legend>
+            <label for="expectation-text">Te controleren tekst</label>
+            <input id="expectation-text" type="text" maxlength="200">
+            <label for="expectation-visibility">Verwachte zichtbaarheid</label>
+            <select id="expectation-visibility" class="preset">
+              <option value="visible">Zichtbaar</option>
+              <option value="hidden">Niet zichtbaar</option>
+            </select>
+          </fieldset>
+          <label class="check"><input id="authorized" type="checkbox" required> Ik heb toestemming om deze website te testen.</label>
+          <button class="primary" id="start">Start AI-test <span aria-hidden="true">→</span></button>
+          <p id="error" role="alert" hidden></p>
+        </form>
+      </section>
+      <section class="panel report">
+        <div class="report-header"><h2>Testrapport</h2><span class="badge" id="status" aria-live="polite">Geen test gestart</span></div>
+        <div id="empty" class="empty"><span aria-hidden="true">◎</span><p>Teststappen, screenshots en bevindingen verschijnen hier zodra je een test start.</p></div>
+        <p id="summary" aria-live="polite" hidden></p>
+        <ol id="steps"></ol>
+        <button type="button" id="export" class="preset" hidden>Download rapport</button>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

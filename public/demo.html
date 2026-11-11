@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Studio Desk · Demo-webshop</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/demo.js" type="module"></script>
+</head>
+<body>
+  <header class="topbar"><div class="wrap brand"><span class="mark" aria-hidden="true">◈</span> Studio Desk <span class="local">Demo-webshop</span></div></header>
+  <main class="wrap">
+    <section class="intro">
+      <h1>Werkplekaccessoires</h1>
+      <p role="status">0 artikelen in winkelwagen</p>
+    </section>
+    <section id="shop" class="panel">
+      <label for="search">Zoek een product</label>
+      <input id="search" type="search" placeholder="Bijv. draadloze muis">
+      <div class="presets" aria-label="Productcategorieën">
+        <button class="preset selected" data-category="all" aria-pressed="true">Alles</button>
+        <button class="preset" data-category="mouse" aria-pressed="false">Muizen</button>
+        <button class="preset" data-category="keyboard" aria-pressed="false">Toetsenborden</button>
+      </div>
+      <div id="products" class="products"></div>
+      <button class="primary" id="checkout-button" disabled>Naar betaalstap</button>
+    </section>
+    <section id="checkout" class="panel" hidden>
+      <h2>Betaalstap</h2>
+      <p>Je winkelwagen is klaar voor deze test. Er wordt geen betaling verwerkt.</p>
+    </section>
+    <dialog id="details" class="panel">
+      <h2></h2>
+      <p></p>
+      <form method="dialog"><button class="preset">Sluiten</button></form>
+    </dialog>
+  </main>
+</body>
+</html>
