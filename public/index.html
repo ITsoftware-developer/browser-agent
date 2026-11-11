@@ -34,6 +34,11 @@
         <span id="security-count" class="badge" data-state="review" hidden></span>
       </div>
       <p id="security-status" role="status"></p>
+      <div id="security-scope" hidden>
+        <p id="security-sample"></p>
+        <h3>Buiten de steekproef</h3>
+        <ul id="security-untested"></ul>
+      </div>
       <details id="security-details" hidden>
         <summary>Bekijk beveiligingscontroles</summary>
         <ul id="security-checks"></ul>
@@ -49,6 +54,25 @@
         <form id="run-form">
           <label for="url">Website-URL</label>
           <input id="url" type="url" required>
+          <details id="domain-verification" hidden>
+            <summary>Domeinverificatie</summary>
+            <p id="domain-status" role="status"></p>
+            <div id="domain-record" hidden>
+              <p>Plaats dit TXT-record bij je DNS-provider en verifieer daarna het domein.</p>
+              <dl>
+                <dt>Naam</dt>
+                <dd><code id="domain-name"></code></dd>
+                <dt>Waarde</dt>
+                <dd><code id="domain-value"></code></dd>
+                <dt>Verloopt op</dt>
+                <dd><time id="domain-expiry"></time></dd>
+              </dl>
+            </div>
+            <div class="domain-actions">
+              <button type="button" class="preset" id="domain-challenge">Genereer TXT-record</button>
+              <button type="button" class="preset" id="domain-verify" disabled>Verifieer domein</button>
+            </div>
+          </details>
           <div id="task-field">
             <label for="task">Testopdracht</label>
             <textarea id="task" required maxlength="2000" rows="4"></textarea>

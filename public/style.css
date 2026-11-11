@@ -72,6 +72,13 @@ dialog::backdrop { background: #10121acc; }
 .settings fieldset { min-width: 0; margin: 0 0 16px; padding: 10px 12px 12px; border: 1px solid var(--border); border-radius: 8px; }
 .settings legend { padding-inline: 4px; color: var(--muted); font-size: .82rem; }
 .settings .check { font-size: .83rem; line-height: 1.4; }
+#domain-verification { margin: 0 0 16px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; }
+#domain-verification summary { cursor: pointer; font-weight: 600; font-size: .86rem; }
+#domain-verification p { margin: 8px 0; font-size: .82rem; }
+#domain-record dl { margin: 10px 0; font-size: .82rem; }
+#domain-record dt { font-weight: 600; }
+#domain-record dd { margin: 3px 0 7px; overflow-wrap: anywhere; }
+.domain-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .panel-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 16px; }
 .panel-heading h2 { margin: 0; }
 #follow-latest[aria-pressed=true] { border-color: #665498; background: #302749; }
@@ -136,6 +143,10 @@ dialog::backdrop { background: #10121acc; }
 
 .security-report { margin-bottom: 16px; }
 #security-status { margin: 8px 0; overflow-wrap: anywhere; }
+#security-scope { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; font-size: .85rem; }
+#security-scope p { margin: 0 0 8px; }
+#security-scope h3 { margin: 0; font-size: .85rem; }
+#security-scope ul { padding-left: 18px; margin: 5px 0 0; color: var(--muted); }
 #security-details summary { cursor: pointer; font-weight: 600; }
 #security-checks {
   display: grid;

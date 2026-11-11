@@ -13,7 +13,7 @@ npm start
 
 Open [het dashboard](http://127.0.0.1:4317). Kies **Demo met fout**, vink de toestemming aan en klik op **Start demotest**. De vijf scenario’s zijn zoeken, categorieën filteren, productdetails openen, toevoegen aan de winkelwagen en de betaalstap bereiken. De muis activeert in de foutdemo een bug. Het toetsenbord kan wel in de winkelwagen, zodat de betaalstap apart kan worden getest. **Werkende demo** gebruikt dezelfde browsercontroles en de variant met een werkende winkelwagen.
 
-Rapporten en screenshots staan per test in `runs/<id>/`. Het JSON-rapport bevat URL’s naar de screenshots op de lokale server.
+Rapporten en screenshots staan per test in `runs/<id>/`. De browser die de test start krijgt toegang via zijn sessiecookie. Het JSON-rapport verwijst naar de bijbehorende screenshots. Querystrings, fragmenten en eventuele inloggegevens in webadressen worden uit de gerapporteerde URL’s verwijderd. De oorspronkelijke URL wordt gebruikt voor de paginalaadactie. Rapporten van vóór deze sessiekoppeling zijn via de bestanden in `runs/` terug te vinden.
 
 ## Publieke website controleren
 
@@ -24,6 +24,12 @@ Plak een publieke HTTP(S)-URL waarvoor je toestemming hebt en klik op **Start we
 Vink **Passieve beveiligingscontrole** aan om de uiteindelijke documentrespons ook te beoordelen op HTTPS, HSTS, CSP, `nosniff`, cookie-attributen en software-informatie in responseheaders. De controle gebruikt de bestaande paginalaadactie. Onder **Beveiligingscontrole** en in het JSON-rapport staat per waarneming het bewijs, eventueel hersteladvies en de toepasselijke verwijzing naar [OWASP ASVS 5.0.0](https://github.com/OWASP/ASVS/releases/tag/v5.0.0).
 
 Een melding **Te beoordelen** beschrijft een configuratiesignaal in de bemonsterde respons. Cookie-attributen worden geanalyseerd zonder cookie-namen of -waarden op te slaan. Een volledige TLS-configuratiecontrole, een dependency-audit en actieve tests vragen aparte gegevens en testopzet.
+
+### Strikte modus met DNS-verificatie
+
+Zet `REQUIRE_DOMAIN_VERIFICATION=1` vóór het starten van de server om externe runs te beperken tot door jouw browsersessie geverifieerde origins. Vul een publieke website-URL in, open **Domeinverificatie**, genereer een TXT-record en voeg de getoonde naam en waarde toe bij je DNS-provider. Klik vervolgens op **Verifieer domein**. Het bewijs geldt voor het exacte schema, de hostnaam en de poort. Bijvoorbeeld `https://voorbeeld.nl` en `https://www.voorbeeld.nl` hebben aparte verificaties.
+
+Een TXT-code blijft vijftien minuten geldig. Een succesvolle verificatie blijft 24 uur geldig zolang deze server draait. Na een serverherstart kun je een nieuw record genereren. In strikte modus worden doorverwijzingen en netwerkverzoeken buiten de geverifieerde origins beperkt.
 
 ## AI-modus voor een eigen testsite
 

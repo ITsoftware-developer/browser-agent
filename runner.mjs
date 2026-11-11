@@ -32,14 +32,20 @@ function documentAddress(value) {
   return url.href;
 }
 
-async function withBrowser({ target, directory, run, publicInspection = false }, test) {
-  const fetchPublic = publicInspection ? createPublicFetcher() : null;
+async function withBrowser({ target, directory, run, publicNetwork = false, verifiedOrigins }, test) {
+  const fetchPublic = publicNetwork ? createPublicFetcher() : null;
+  const inTestScope = url => {
+    if (verifiedOrigins && !verifiedOrigins.has(url.origin)) return false;
+    if (fetchPublic && run.mode === 'inspection') return isPublicUrl(url);
+    return url.origin === target.origin &&
+      (run.mode !== 'demo' || ['/demo', '/demo.js', '/style.css'].includes(url.pathname));
+  };
   const browser = await chromium.launch({
     channel: process.env.BROWSER_CHANNEL || 'msedge',
     headless: true,
     // The browser receives routed responses. Other browser traffic has no direct connection.
-    proxy: publicInspection ? { server: 'http://127.0.0.1:1', bypass: '<-loopback>' } : undefined,
-    args: publicInspection ? [
+    proxy: publicNetwork ? { server: 'http://127.0.0.1:1', bypass: '<-loopback>' } : undefined,
+    args: publicNetwork ? [
       '--disable-quic',
       '--dns-prefetch-disable',
       '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
@@ -92,8 +98,7 @@ async function withBrowser({ target, directory, run, publicInspection = false },
           };
         };
       }
-      const inScope = fetchPublic ? isPublicUrl(url) : url.origin === target.origin &&
-        (run.mode !== 'demo' || ['/demo', '/demo.js', '/style.css'].includes(url.pathname));
+      const inScope = inTestScope(url);
       const allowedMethod = ['GET', 'HEAD'].includes(info.method);
       if (!inScope || !allowedMethod) {
         const issue = reportNetworkIssue({ ...info, reason: inScope ? 'method' : 'scope' },
@@ -137,7 +142,7 @@ async function withBrowser({ target, directory, run, publicInspection = false },
         const location = (forwarded?.headers ?? response.headers()).location;
         if (status >= 300 && status < 400 && location) {
           const next = new URL(location, url);
-          if (next.username || next.password || (fetchPublic ? !isPublicUrl(next) : next.origin !== target.origin)) {
+          if (next.username || next.password || !inTestScope(next)) {
             reportNetworkIssue({ ...info, reason: 'redirect' }, `Doorverwijzing vanaf ${info.path} geblokkeerd.`, requestStep);
             return await route.abort();
           }
@@ -227,7 +232,7 @@ async function withBrowser({ target, directory, run, publicInspection = false },
       return step;
     };
     const openDocument = async () => {
-      const deadline = performance.now() + (publicInspection ? 18000 : 12000);
+      const deadline = performance.now() + (publicNetwork ? 18000 : 12000);
       let next = target;
       for (let hop = 0; hop <= 10; hop++) {
         const timeout = Math.max(1, Math.ceil(deadline - performance.now()));

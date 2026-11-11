@@ -24,9 +24,32 @@ function waitForReport(page) {
     response.ok() && (await response.json()).status !== 'running');
 }
 
+async function startApp(t, overrides) {
+  const app = spawn(process.execPath, ['server.mjs'], {
+    env: {
+      ...process.env,
+      PORT: '0',
+      TEST_ORIGINS: '',
+      LLM_API_KEY: '',
+      LLM_ENDPOINT: '',
+      LLM_MODEL: '',
+      REQUIRE_DOMAIN_VERIFICATION: '0',
+      ...overrides,
+    },
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  t.after(() => app.kill());
+  const [startup] = await once(app.stdout, 'data', { signal: AbortSignal.timeout(5000) });
+  const origin = startup.toString().match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];
+  assert.ok(origin);
+  return origin;
+}
+
 test('website inspection works without a model or task and rejects unconfigured private targets', async t => {
   const securityRequests = [];
+  let requestWithToken;
   const website = await serve(t, (request, response) => {
+    if (request.url.includes('qa-secret')) requestWithToken = request.url;
     if (request.url === '/beveiliging-buiten-scope') {
       response.writeHead(302, { Location: '/beveiliging-doorsturen' });
       return response.end();
@@ -59,21 +82,7 @@ test('website inspection works without a model or task and rejects unconfigured 
     response.end('Privépagina');
   });
 
-  const app = spawn(process.execPath, ['server.mjs'], {
-    env: {
-      ...process.env,
-      PORT: '0',
-      TEST_ORIGINS: website,
-      LLM_API_KEY: '',
-      LLM_ENDPOINT: '',
-      LLM_MODEL: '',
-    },
-    stdio: ['ignore', 'pipe', 'inherit'],
-  });
-  t.after(() => app.kill());
-  const [startup] = await once(app.stdout, 'data', { signal: AbortSignal.timeout(5000) });
-  const origin = startup.toString().match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];
-  assert.ok(origin);
+  const origin = await startApp(t, { TEST_ORIGINS: website });
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'msedge' });
   t.after(() => browser.close());
   const page = await browser.newPage();
@@ -88,7 +97,7 @@ test('website inspection works without a model or task and rejects unconfigured 
   const targetUrl = page.getByLabel('Website-URL');
   const expectedText = page.getByLabel('Te controleren tekst');
   const startWebsite = page.getByRole('button', { name: 'Start websitetest', exact: true });
-  await targetUrl.fill(website);
+  await targetUrl.fill(`${website}/?token=qa-secret#report-private`);
   await page.getByLabel('Testopdracht').waitFor({ state: 'hidden' });
   await expectedText.fill('Welkom in de testwinkel');
   await page.getByRole('checkbox', { name: 'Ik heb toestemming om deze website te testen.' }).check();
@@ -103,6 +112,9 @@ test('website inspection works without a model or task and rejects unconfigured 
   assert.equal(report.status, 'completed');
   assert.equal(report.coverage, 'full');
   assert.equal(report.security, undefined);
+  assert.equal(requestWithToken, '/?token=qa-secret');
+  assert.equal(report.url, `${website}/`);
+  assert.doesNotMatch(JSON.stringify(report), /qa-secret|report-private/);
   const check = report.steps.find(step => step.check?.value === 'Welkom in de testwinkel');
   assert.equal(check?.status, 'passed');
   assert.equal(check.actual, true);
@@ -110,6 +122,13 @@ test('website inspection works without a model or task and rejects unconfigured 
   const proof = await page.request.get(new URL(check.screenshot, origin).href);
   assert.equal(proof.status(), 200);
   assert.equal(proof.headers()['content-type'], 'image/png');
+  const outsider = await browser.newContext();
+  t.after(() => outsider.close());
+  const outsiderPage = await outsider.newPage();
+  await outsiderPage.goto(origin);
+  const reportUrl = `${origin}/api/runs/${report.id}`;
+  assert.equal((await outsider.request.get(reportUrl)).status(), 404);
+  assert.equal((await outsider.request.get(new URL(check.screenshot, origin).href)).status(), 404);
   await page.getByText('Website · Afgerond · Dekking volledig', { exact: true }).waitFor();
   await page.locator('#preview-image').waitFor({ state: 'visible' });
 
@@ -121,6 +140,7 @@ test('website inspection works without a model or task and rejects unconfigured 
   assert.equal(exported.id, report.id);
   assert.equal(exported.mode, 'inspection');
   assert.equal(exported.steps.find(step => step.id === check.id).screenshot, new URL(check.screenshot, origin).href);
+  assert.doesNotMatch(JSON.stringify(exported), /qa-secret|report-private/);
 
   await targetUrl.fill(`${website}/beveiliging-start`);
   const securityOption = page.getByRole('checkbox', { name: 'Passieve beveiligingscontrole' });
@@ -140,6 +160,7 @@ test('website inspection works without a model or task and rejects unconfigured 
   assert.equal(security.checks.find(check => check.id === 'banner').status, 'observed');
   assert.doesNotMatch(JSON.stringify(securityRun), /test-secret-name|private-cookie-value/);
   await page.getByRole('heading', { name: 'Beveiligingscontrole', exact: true }).waitFor();
+  await page.getByText('Buiten de steekproef', { exact: true }).waitFor();
   await page.getByText('Bekijk beveiligingscontroles', { exact: true }).click();
   await page.getByText('X-Content-Type-Options: nosniff waargenomen.', { exact: true }).waitFor();
   assert.ok(await page.getByRole('link', { name: /ASVS v5.0.0-3.4.4/ }).getAttribute('href'));
@@ -164,4 +185,39 @@ test('website inspection works without a model or task and rejects unconfigured 
   assert.ok(notFound.steps.some(step => step.status === 'failed' && /404/.test(step.detail)));
   await page.getByText('Website · Fout gevonden · Dekking gedeeltelijk', { exact: true }).waitFor();
   await page.getByRole('heading', { name: 'Beveiligingscontrole', exact: true }).waitFor({ state: 'hidden' });
+
+  const storedReport = await page.request.get(reportUrl);
+  assert.equal(storedReport.status(), 200);
+  assert.deepEqual(await storedReport.json(), report);
+  assert.equal((await outsider.request.get(reportUrl)).status(), 404);
+  assert.equal((await outsider.request.get(new URL(check.screenshot, origin).href)).status(), 404);
+  const saved = await readFile(new URL(`../runs/${report.id}/report.json`, import.meta.url), 'utf8');
+  assert.doesNotMatch(saved, /qa-secret|report-private|browser_agent_owner/);
+});
+
+test('strict mode gates runs on owner-scoped DNS verification before launching a browser', async t => {
+  const origin = await startApp(t, { REQUIRE_DOMAIN_VERIFICATION: '1' });
+  const settings = await fetch(`${origin}/api/capabilities`);
+  const owner = settings.headers.get('set-cookie').split(';', 1)[0];
+  assert.match(settings.headers.get('set-cookie'), /HttpOnly; SameSite=Strict/);
+  assert.deepEqual(await settings.json(), { aiOrigins: [], requireDomainVerification: true, verifiedOrigins: [] });
+  const url = 'https://example.com/pagina?test=1';
+  const post = (path, cookie, input) => fetch(`${origin}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify(input),
+  });
+  const blocked = await post('/api/runs', owner, { url, authorized: true, security: true });
+  assert.equal(blocked.status, 403);
+  assert.equal((await blocked.json()).code, 'DOMAIN_NOT_VERIFIED');
+  const challenge = await post('/api/domain/challenge', owner, { url });
+  assert.equal(challenge.status, 200);
+  const proof = await challenge.json();
+  assert.equal(proof.name, '_browser-agent.example.com');
+  assert.equal(proof.origin, 'https://example.com');
+  assert.match(proof.value, /^browser-agent=[a-f0-9]+$/);
+  const stranger = await post('/api/domain/verify', undefined, { url });
+  assert.equal(stranger.status, 409);
+  const stillBlocked = await post('/api/runs', owner, { url, authorized: true });
+  assert.equal(stillBlocked.status, 403);
 });

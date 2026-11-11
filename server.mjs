@@ -7,6 +7,8 @@ import { parseExpectations } from './agent-actions.mjs';
 import { getRunOutcome } from './run-status.mjs';
 import { isPublicUrl } from './public-network.mjs';
 import { buildSecurityReport } from './security-checks.mjs';
+import { createDomainVerification } from './domain-verification.mjs';
+import { redactReportValue, reportOwner } from './report-privacy.mjs';
 
 const port = Number(process.env.PORT || 4317);
 let base = `http://127.0.0.1:${port}`;
@@ -14,6 +16,8 @@ const allowedOrigins = new Set((process.env.TEST_ORIGINS || '').split(',').map(v
 const model = process.env.LLM_MODEL;
 const endpoint = process.env.LLM_ENDPOINT;
 const aiOrigins = model && endpoint ? [...allowedOrigins] : [];
+const requireDomainVerification = process.env.REQUIRE_DOMAIN_VERIFICATION === '1';
+const domains = createDomainVerification();
 const configuredModelTimeout = Number(process.env.LLM_TIMEOUT_MS);
 const modelTimeoutMs = Number.isInteger(configuredModelTimeout) && configuredModelTimeout >= 1 &&
   configuredModelTimeout <= 120000 ? configuredModelTimeout : undefined;
@@ -26,9 +30,9 @@ const files = {
   '/demo.js': ['demo.js', 'text/javascript'],
 };
 
-function json(response, status, data) {
+function json(response, status, data, replacer) {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(data));
+  response.end(JSON.stringify(data, replacer));
 }
 
 function appendRunError(run, errorCode, detail) {
@@ -45,19 +49,20 @@ function appendRunError(run, errorCode, detail) {
   });
 }
 
-async function start(request, response) {
-  if (activeRun) return json(response, 409, { error: 'Er loopt al een test.' });
+async function readJson(request) {
   let body = '';
   for await (const chunk of request) {
     body += chunk;
-    if (body.length > 8192) return json(response, 413, { error: 'De opdracht is te lang.' });
+    if (body.length > 8192) throw Object.assign(new Error('De aanvraag is te lang.'), { status: 413 });
   }
-  let input;
   try {
-    input = JSON.parse(body);
+    return JSON.parse(body);
   } catch {
-    return json(response, 400, { error: 'Ongeldige aanvraag.' });
+    throw Object.assign(new Error('Ongeldige aanvraag.'), { status: 400 });
   }
+}
+
+async function start(input, response, owner) {
   if (activeRun) return json(response, 409, { error: 'Er loopt al een test.' });
   if (input?.authorized !== true) {
     return json(response, 400, { error: 'Bevestig dat je toestemming hebt om de website te testen.' });
@@ -74,9 +79,13 @@ async function start(request, response) {
   const demo = target.origin === base && target.pathname === '/demo';
   const securityRequested = !demo && input.security === true;
   const mode = demo ? 'demo' : !securityRequested && aiOrigins.includes(target.origin) ? 'ai' : 'inspection';
-  const publicInspection = mode === 'inspection' && !allowedOrigins.has(target.origin);
-  if (publicInspection && !isPublicUrl(target)) {
+  const verifiedOrigins = !demo && requireDomainVerification ? new Set(domains.verifiedOrigins(owner)) : undefined;
+  const publicNetwork = Boolean(verifiedOrigins) || (mode === 'inspection' && !allowedOrigins.has(target.origin));
+  if (publicNetwork && !isPublicUrl(target)) {
     return json(response, 400, { error: 'Gebruik een publieke website-URL. Een lokale testsite kun je instellen via TEST_ORIGINS.' });
+  }
+  if (verifiedOrigins && !verifiedOrigins.has(target.origin)) {
+    return json(response, 403, { code: 'DOMAIN_NOT_VERIFIED', error: 'Verifieer dit domein via het DNS TXT-record voordat je een test start.' });
   }
   const task = typeof input.task === 'string' ? input.task.trim() : '';
   if (mode === 'ai' && (!task || task.length > 2000)) {
@@ -94,18 +103,19 @@ async function start(request, response) {
   const run = { id, url: target.href, task: mode === 'inspection' ? 'Automatische websitecontrole' : task, mode, status: 'running', steps: [] };
   if (securityRequested) run.securityRequested = true;
   if (!demo && expectations.length) run.expectations = expectations;
-  activeRun = run;
-  json(response, 202, run);
+  activeRun = { owner, run };
+  json(response, 202, run, redactReportValue);
 
   let outcome;
   try {
     await mkdir(directory, { recursive: true });
-    const options = { target, run, directory: fileURLToPath(directory), model, endpoint, modelTimeoutMs, publicInspection };
+    await writeFile(new URL('owner', directory), owner, { flag: 'wx', mode: 0o600 });
+    const options = { target, run, directory: fileURLToPath(directory), model, endpoint, modelTimeoutMs, publicNetwork, verifiedOrigins };
     const runTest = { demo: runDemo, ai: runAgent, inspection: runInspection }[mode];
     await runTest(options);
     outcome = getRunOutcome(run);
   } catch (error) {
-    console.error(error.message);
+    console.error(redactReportValue('', error.message));
     if (run.coverage !== 'full') {
       run.coverage = 'partial';
       run.incompleteReason ??= 'De test is voortijdig afgebroken.';
@@ -122,15 +132,15 @@ async function start(request, response) {
   }
   if (run.securityRequested) run.security ??= buildSecurityReport(null);
   try {
-    await writeFile(new URL('report.json', directory), JSON.stringify({ ...run, ...outcome }, null, 2));
+    await writeFile(new URL('report.json', directory), JSON.stringify({ ...run, ...outcome }, redactReportValue, 2));
   } catch (error) {
-    console.error(error.message);
+    console.error(redactReportValue('', error.message));
     run.summary = 'Het testrapport kon niet op schijf worden opgeslagen.';
     run.errorCode = 'report_write_failed';
     appendRunError(run, run.errorCode, run.summary);
     outcome = getRunOutcome({ ...run, status: 'error' });
   }
-  lastRun = { ...run, ...outcome };
+  lastRun = { owner, run: { ...run, ...outcome } };
   activeRun = undefined;
 }
 
@@ -141,38 +151,54 @@ const server = createServer(async (request, response) => {
   if (request.headers.host !== new URL(base).host) return json(response, 403, { error: 'Gebruik het lokale adres.' });
   const path = new URL(request.url, base).pathname;
   try {
-    if (request.method === 'POST' && path === '/api/runs') {
+    if (request.method === 'POST' && ['/api/runs', '/api/domain/challenge', '/api/domain/verify'].includes(path)) {
       if (request.headers.origin && request.headers.origin !== base) return json(response, 403, { error: 'Ongeldige herkomst.' });
       if (!request.headers['content-type']?.startsWith('application/json')) return json(response, 415, { error: 'JSON vereist.' });
-      return await start(request, response);
+      const input = await readJson(request);
+      const owner = reportOwner(request, response);
+      if (path === '/api/domain/challenge') return json(response, 200, domains.challenge(owner, input?.url));
+      if (path === '/api/domain/verify') return json(response, 200, await domains.verify(owner, input?.url));
+      return await start(input, response, owner);
     }
     if (request.method === 'GET') {
-      if (path === '/api/capabilities') return json(response, 200, { aiOrigins });
+      if (path === '/api/capabilities') {
+        const owner = reportOwner(request, response);
+        return json(response, 200, { aiOrigins, requireDomainVerification, verifiedOrigins: domains.verifiedOrigins(owner) });
+      }
       const match = /^\/api\/runs\/([a-f0-9-]{36})(?:\/(\d+\.png))?$/.exec(path);
       if (match) {
-        if (!match[2]) {
-          const current = [activeRun, lastRun].find(run => run?.id === match[1]);
-          const report = current || JSON.parse(await readFile(new URL(`runs/${match[1]}/report.json`, import.meta.url), 'utf8'));
-          if (report.status === 'running') {
-            return json(response, 200, { ...report, ...getRunOutcome(report), status: 'running' });
-          }
-          return json(response, 200, { ...report, ...getRunOutcome(report) });
+        const owner = reportOwner(request);
+        const current = [activeRun, lastRun].find(entry => entry?.run.id === match[1]);
+        const directory = new URL(`runs/${match[1]}/`, import.meta.url);
+        if (!owner || owner !== (current?.owner ?? await readFile(new URL('owner', directory), 'utf8'))) {
+          return json(response, 404, { error: 'Rapport niet gevonden.' });
         }
-        const screenshot = await readFile(new URL(`runs/${match[1]}/${match[2]}`, import.meta.url));
+        if (!match[2]) {
+          const report = current?.run ?? JSON.parse(await readFile(new URL('report.json', directory), 'utf8'));
+          if (report.status === 'running') {
+            return json(response, 200, { ...report, ...getRunOutcome(report), status: 'running' }, redactReportValue);
+          }
+          return json(response, 200, { ...report, ...getRunOutcome(report) }, redactReportValue);
+        }
+        const screenshot = await readFile(new URL(match[2], directory));
         response.writeHead(200, { 'Content-Type': 'image/png' });
         return response.end(screenshot);
       }
       if (Object.hasOwn(files, path)) {
         const [file, type] = files[path];
         const content = await readFile(new URL(`public/${file}`, import.meta.url));
+        if (path === '/') reportOwner(request, response);
         response.writeHead(200, { 'Content-Type': `${type}; charset=utf-8` });
         return response.end(content);
       }
     }
     json(response, 404, { error: 'Pagina niet gevonden.' });
   } catch (error) {
+    if (Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {
+      return json(response, error.status, { error: error.message });
+    }
     if (error.code === 'ENOENT') return json(response, 404, { error: 'Bestand niet gevonden.' });
-    console.error(error.message);
+    console.error(redactReportValue('', error.message));
     json(response, 500, { error: 'De server kon de aanvraag niet verwerken.' });
   }
 });

@@ -11,8 +11,19 @@ const securityEnabled = document.querySelector('#security-enabled');
 const securityPanel = document.querySelector('#security-report');
 const securityStatus = document.querySelector('#security-status');
 const securityCount = document.querySelector('#security-count');
+const securityScope = document.querySelector('#security-scope');
+const securitySample = document.querySelector('#security-sample');
+const securityUntested = document.querySelector('#security-untested');
 const securityDetails = document.querySelector('#security-details');
 const securityChecks = document.querySelector('#security-checks');
+const domainVerification = document.querySelector('#domain-verification');
+const domainStatus = document.querySelector('#domain-status');
+const domainRecord = document.querySelector('#domain-record');
+const domainName = document.querySelector('#domain-name');
+const domainValue = document.querySelector('#domain-value');
+const domainExpiry = document.querySelector('#domain-expiry');
+const domainChallenge = document.querySelector('#domain-challenge');
+const domainVerify = document.querySelector('#domain-verify');
 const authorized = document.querySelector('#authorized');
 const start = document.querySelector('#start');
 const startLabel = document.querySelector('#start-label');
@@ -36,6 +47,10 @@ const followLatest = document.querySelector('#follow-latest');
 let latestRun;
 let pinnedStepIndex = null;
 let aiOrigins = new Set();
+let verifiedOrigins = new Set();
+let requireDomainVerification = false;
+const domainStates = new Map();
+let domainRequest;
 let currentMode;
 let aiTask = '';
 
@@ -45,6 +60,7 @@ const startLabels = {
   inspection: 'Start websitetest',
   ai: 'Start AI-test',
 };
+const domainDate = new Intl.DateTimeFormat('nl-NL', { dateStyle: 'short', timeStyle: 'short' });
 
 function selectDemo(scenario) {
   url.value = `${location.origin}/demo?scenario=${scenario}`;
@@ -69,10 +85,96 @@ function targetMode(target) {
   return aiOrigins.has(target?.origin) ? 'ai' : 'inspection';
 }
 
+function isExternalTarget(target) {
+  return ['http:', 'https:'].includes(target?.protocol) && !isDemoTarget(target);
+}
+
+function isDomainVerified(origin) {
+  const verifiedUntil = domainStates.get(origin)?.verifiedUntil;
+  return verifiedUntil ? new Date(verifiedUntil).getTime() > Date.now() : verifiedOrigins.has(origin);
+}
+
+function renderDomainVerification(target = targetUrl()) {
+  domainVerification.hidden = !isExternalTarget(target);
+  if (domainVerification.hidden) {
+    domainVerification.open = false;
+    delete domainVerification.dataset.origin;
+    return;
+  }
+  const { origin } = target;
+  const state = domainStates.get(origin);
+  const verified = isDomainVerified(origin);
+  const required = requireDomainVerification && !verified;
+  if (domainVerification.dataset.origin !== origin) domainVerification.open = required;
+  else if (required && domainVerification.dataset.required !== 'true') domainVerification.open = true;
+  domainVerification.dataset.origin = origin;
+  domainVerification.dataset.required = String(required);
+
+  const challenge = state?.challenge;
+  const expired = challenge && new Date(challenge.expiresAt).getTime() <= Date.now();
+  domainChallenge.disabled = Boolean(domainRequest) || verified;
+  domainVerify.disabled = Boolean(domainRequest) || verified || !challenge || expired;
+  domainRecord.hidden = !challenge || verified;
+  if (!domainRecord.hidden) {
+    domainName.textContent = challenge.name;
+    domainValue.textContent = challenge.value;
+    domainExpiry.dateTime = challenge.expiresAt;
+    domainExpiry.textContent = domainDate.format(new Date(challenge.expiresAt));
+  }
+
+  if (domainRequest?.origin === origin) {
+    domainStatus.textContent = domainRequest.action === 'challenge' ? 'TXT-record voorbereiden…' : 'TXT-record opzoeken…';
+  } else if (verified) {
+    domainStatus.textContent = state?.verifiedUntil
+      ? `Domein geverifieerd tot ${domainDate.format(new Date(state.verifiedUntil))}.`
+      : 'Domein geverifieerd.';
+  } else if (state?.error) {
+    domainStatus.textContent = state.error;
+  } else if (expired) {
+    domainStatus.textContent = 'Het TXT-record is verlopen. Genereer een nieuw record.';
+  } else {
+    domainStatus.textContent = required
+      ? 'Verifieer dit domein voordat je de test start.'
+      : 'Je kunt het eigendom van dit domein aantonen met een DNS TXT-record.';
+  }
+}
+
+async function runDomainAction(action) {
+  const target = targetUrl();
+  if (!isExternalTarget(target) || domainRequest) return;
+  const { origin } = target;
+  const state = domainStates.get(origin) ?? {};
+  domainStates.set(origin, state);
+  domainRequest = { origin, action };
+  state.error = '';
+  renderDomainVerification(target);
+  try {
+    await capabilities;
+    const activeTarget = targetUrl();
+    if (!isExternalTarget(activeTarget) || activeTarget.origin !== origin) return;
+    const result = await request(`/api/domain/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: target.href }),
+    });
+    if (action === 'challenge') {
+      state.challenge = result;
+    } else {
+      state.verifiedUntil = result.verifiedUntil;
+      state.challenge = undefined;
+    }
+  } catch (failure) {
+    state.error = failure.message;
+  } finally {
+    domainRequest = undefined;
+    renderDomainVerification();
+  }
+}
+
 function updateTargetFields() {
   const target = targetUrl();
   const mode = targetMode(target);
-  const showExpectation = mode !== 'demo' && ['http:', 'https:'].includes(target?.protocol);
+  const showExpectation = isExternalTarget(target);
   if (mode !== currentMode) {
     if (currentMode === 'ai') aiTask = task.value;
     task.value = mode === 'demo' ? demoTask : aiTask;
@@ -88,6 +190,7 @@ function updateTargetFields() {
   expectation.disabled = !showExpectation;
   securityOption.hidden = !showExpectation;
   securityEnabled.disabled = !showExpectation;
+  renderDomainVerification(target);
 }
 
 function markPreset(scenario) {
@@ -105,9 +208,13 @@ url.addEventListener('input', () => {
   markPreset(preset?.dataset.demo);
 });
 securityEnabled.addEventListener('change', updateTargetFields);
+domainChallenge.addEventListener('click', () => runDomainAction('challenge'));
+domainVerify.addEventListener('click', () => runDomainAction('verify'));
 selectDemo('bug');
 const capabilities = request('/api/capabilities').then(data => {
   aiOrigins = new Set(data.aiOrigins);
+  verifiedOrigins = new Set(data.verifiedOrigins);
+  requireDomainVerification = data.requireDomainVerification === true;
   updateTargetFields();
 }).catch(() => {
   // The server still validates the target and its selected test mode when a run starts.
@@ -258,7 +365,12 @@ followLatest.addEventListener('click', () => {
   renderPreview();
 });
 
-const securityLabels = { observed: 'Waargenomen', review: 'Te beoordelen', not_observed: 'Niet waargenomen' };
+const securityLabels = {
+  observed: 'Waargenomen',
+  review: 'Te beoordelen',
+  not_observed: 'Niet waargenomen',
+  recommendation: 'Aanbeveling',
+};
 const securitySeverity = { info: 'Informatief', low: 'Laag', medium: 'Middel' };
 
 function renderSecurity(run) {
@@ -273,16 +385,27 @@ function renderSecurity(run) {
   if (securityPanel.dataset.state === state) return;
   securityPanel.dataset.state = state;
   securityChecks.replaceChildren();
+  securityUntested.replaceChildren();
+  securityScope.hidden = true;
   securityDetails.hidden = state !== 'ready';
   securityCount.hidden = state !== 'ready';
   if (state !== 'ready') {
     securityStatus.textContent = state === 'loading' ? 'Wachten op de documentrespons…' : 'Documentrespons niet beschikbaar.';
     return;
   }
-  const { document: source, standard, checks } = run.security;
+  const { document: source, standard, checks, scope } = run.security;
   securityStatus.textContent = source
     ? `${standard} · Documentrespons HTTP ${source.httpStatus} · ${source.url}. De resultaten gelden voor deze respons.`
     : `${standard} · Documentrespons niet beschikbaar.`;
+  if (scope) {
+    securitySample.textContent = scope.sample;
+    for (const category of scope.untested) {
+      const item = document.createElement('li');
+      item.textContent = category;
+      securityUntested.append(item);
+    }
+    securityScope.hidden = false;
+  }
   const pending = checks.filter(check => check.status === 'review').length;
   securityCount.dataset.state = pending ? 'review' : 'observed';
   securityCount.textContent = `${pending} te beoordelen`;
@@ -306,7 +429,10 @@ function renderSecurity(run) {
     }
     for (const reference of check.asvs ?? []) {
       if (reference.url.startsWith('https://github.com/OWASP/ASVS/blob/v5.0.0/')) {
-        item.append(screenshotLink(reference.url, `ASVS ${reference.id} ↗`));
+        const citation = document.createElement('p');
+        citation.append(screenshotLink(reference.url, `ASVS ${reference.id} ↗`));
+        if (reference.applicability) citation.append(` · ${reference.applicability}`);
+        item.append(citation);
       }
     }
     securityChecks.append(item);
@@ -384,7 +510,11 @@ function render(run) {
 async function request(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error);
+  if (!response.ok) {
+    const failure = new Error(data.error);
+    failure.code = data.code;
+    throw failure;
+  }
   return data;
 }
 
@@ -392,11 +522,20 @@ form.addEventListener('submit', async event => {
   event.preventDefault();
   start.disabled = true;
   error.hidden = true;
+  let submittedOrigin;
   try {
     const submittedUrl = url.value;
     if (!isDemoTarget(targetUrl())) await capabilities;
     if (url.value !== submittedUrl || !form.reportValidity()) return;
-    const mode = targetMode(targetUrl());
+    const target = targetUrl();
+    const mode = targetMode(target);
+    submittedOrigin = target?.origin;
+    if (mode !== 'demo' && requireDomainVerification && !isDomainVerified(submittedOrigin)) {
+      renderDomainVerification(target);
+      domainVerification.open = true;
+      domainVerification.querySelector('summary').focus();
+      return;
+    }
     const input = { url: submittedUrl, authorized: authorized.checked };
     if (securityEnabled.checked && !securityEnabled.disabled) input.security = true;
     if (mode !== 'inspection') input.task = task.value;
@@ -416,6 +555,13 @@ form.addEventListener('submit', async event => {
       render(run);
     }
   } catch (failure) {
+    if (failure.code === 'DOMAIN_NOT_VERIFIED') {
+      requireDomainVerification = true;
+      verifiedOrigins.delete(submittedOrigin);
+      const state = domainStates.get(submittedOrigin);
+      if (state) state.verifiedUntil = undefined;
+      renderDomainVerification();
+    }
     error.textContent = failure.message;
     error.hidden = false;
   } finally {
