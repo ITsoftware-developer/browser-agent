@@ -1,6 +1,6 @@
 import { AgentError, requestModel } from '../runner.mjs';
 import { resolvePublicAddress } from '../public-network.mjs';
-import { profileRevision, profileSummary } from '../security-profiles.mjs';
+import { profileRevision, profileSummary, resolveSecurityProfileCredentials } from '../security-profiles.mjs';
 import { runActiveSecurity } from './browser-probes.mjs';
 
 const stepStatuses = { confirmed: 'failed', protected: 'passed', inconclusive: 'error', not_tested: 'skipped' };
@@ -16,11 +16,7 @@ function evidenceText(check) {
 export async function runLabChecks({ run, profile, model, endpoint, modelTimeoutMs = 5000 }) {
   const profileMetadata = { ...profileSummary(profile), revision: profileRevision(profile),
     approvalReference: profile.approval.reference };
-  let report;
-  try {
-    const pinnedAddress = profile.origin.startsWith('https:') ? await resolvePublicAddress(profile.origin) : undefined;
-    report = await runActiveSecurity(profile, { pinnedAddress });
-  } catch (error) {
+  function unavailable(code, message, cause) {
     run.activeSecurity = {
       profile: profileMetadata,
       checks: [
@@ -30,7 +26,22 @@ export async function runLabChecks({ run, profile, model, endpoint, modelTimeout
           route: `POST ${profile.session.logoutPath}` },
       ],
     };
-    throw new AgentError('active_security_unavailable', 'Het goedgekeurde testdoel of het bewijs van toestemming kon niet worden vastgesteld.', { cause: error });
+    return new AgentError(code, message, { cause });
+  }
+  let executionProfile;
+  try {
+    executionProfile = resolveSecurityProfileCredentials(profile);
+  } catch (error) {
+    throw unavailable('active_profile_credentials_unavailable',
+      'De inloggegevens voor dit testprofiel ontbreken of zijn ongeldig. Controleer de ingestelde omgevingsvariabelen.', error);
+  }
+  let report;
+  try {
+    const pinnedAddress = profile.origin.startsWith('https:') ? await resolvePublicAddress(profile.origin) : undefined;
+    report = await runActiveSecurity(executionProfile, { pinnedAddress });
+  } catch (error) {
+    throw unavailable('active_security_unavailable',
+      'Het goedgekeurde testdoel of het bewijs van toestemming kon niet worden vastgesteld.', error);
   }
   report.profile = profileMetadata;
   run.activeSecurity = report;

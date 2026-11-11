@@ -530,8 +530,10 @@ const labObservationLabels = {
   anonymousHttpStatus: 'Toegang zonder sessie',
   aliceOwn: 'Eigen record van Alice',
   bobOwn: 'Eigen record van Bob',
+  crossSessionApplicable: 'Sessiecookie van Bob is geldig voor het pad van Alice',
   cross: 'Bob vraagt het record van Alice op',
   before: 'Eigen record vóór uitloggen',
+  replayBeforeLogout: 'Hergebruik van de oorspronkelijke sessie vóór uitloggen',
   logoutHttpStatus: 'Uitloggen',
   cookieRemoved: 'Cookie na uitloggen uit de browser verwijderd',
   afterLogout: 'Verzoek uit dezelfde browsercontext na uitloggen',
@@ -544,6 +546,7 @@ const profileObservationLabels = {
   bobSessionHttpStatus: 'Aanmelden tweede testaccount',
   aliceOwn: 'Eigen record van het eerste testaccount',
   bobOwn: 'Eigen record van het tweede testaccount',
+  crossSessionApplicable: 'Sessiecookie van het tweede testaccount geldt voor het geteste pad',
   cross: 'Tweede testaccount vraagt het record van het eerste testaccount op',
 };
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +17,7 @@ const accounts = {
   b: { label: 'Team blauw', login: { path: '/auth/enter', body: { handle: 'blue', pin: 'qa-pin-blue' }, status: 200 },
     record: { path: '/notes/secondary', match: { note: { owner: 'blue' } } } },
 };
+const pinVariables = { a: 'SECURITY_TEST_USER_A_PASSWORD', b: 'SECURITY_TEST_USER_B_PASSWORD' };
 
 async function startFixture(t) {
   const sessions = new Map();
@@ -78,7 +79,14 @@ function profileFor(id, origin) {
     id, name: 'Oefenomgeving notities', origin, entryPath: '/control',
     approval: { reference: 'QA-ticket 22', expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       proof: { path: '/proof-qa', value: proof } },
-    accounts,
+    accounts: Object.fromEntries(Object.entries(accounts).map(([key, account]) => [key, {
+      ...account,
+      login: {
+        ...account.login,
+        body: { handle: account.login.body.handle },
+        bodyEnv: { pin: pinVariables[key] },
+      },
+    }])),
     session: { cookieName: 'stage_token', logoutPath: '/auth/leave', logoutStatus: 204, anonymousStatus: 401 },
     authorization: { deniedStatus: 403 },
     allowedRequests: [
@@ -100,18 +108,41 @@ async function completedReport(page, origin, id) {
   assert.fail('the run did not finish within 30 seconds');
 }
 
+async function startModel(t) {
+  const inputs = [];
+  const server = createServer(async (request, response) => {
+    let body = '';
+    for await (const chunk of request) body += chunk;
+    inputs.push(JSON.parse(body));
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify({ choices: [{ message: { content: 'De browserproeven hebben bewijs vastgelegd.' } }] }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => {
+    server.closeAllConnections();
+    return new Promise(resolve => server.close(resolve));
+  });
+  return { endpoint: `http://127.0.0.1:${server.address().port}/model`, inputs };
+}
+
 test('one profile detects, verifies and compares both controls on a second application', { timeout: 90000 }, async t => {
   const fixture = await startFixture(t);
+  const model = await startModel(t);
   const local = profileFor('staging-notes', fixture.origin);
   const remote = profileFor('staging-https', 'https://example.com');
+  const incomplete = { ...profileFor('missing-test-pin', fixture.origin), entryPath: '/missing-test-pin' };
+  incomplete.accounts.a.login.bodyEnv.pin = 'SECURITY_TEST_MISSING_PASSWORD';
   const directory = await mkdtemp(join(tmpdir(), 'browser-agent-profiles-'));
   const file = join(directory, 'profiles.json');
-  await writeFile(file, JSON.stringify([local, remote]));
+  await writeFile(file, JSON.stringify([local, remote, incomplete]));
   t.after(async () => { await unlink(file); await rmdir(directory); });
   const dashboard = spawn(process.execPath, ['server.mjs'], {
     cwd: new URL('../', import.meta.url),
     env: { ...process.env, PORT: '0', TEST_ORIGINS: '', SECURITY_LAB_ORIGIN: '', REQUIRE_DOMAIN_VERIFICATION: '0',
-      LLM_ENDPOINT: '', LLM_MODEL: '', ACTIVE_SECURITY_PROFILES_FILE: file },
+      LLM_ENDPOINT: model.endpoint, LLM_MODEL: 'fixture-model', LLM_API_KEY: '', ACTIVE_SECURITY_PROFILES_FILE: file,
+      SECURITY_TEST_MISSING_PASSWORD: '',
+      [pinVariables.a]: accounts.a.login.body.pin, [pinVariables.b]: accounts.b.login.body.pin },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   t.after(() => dashboard.kill());
@@ -135,6 +166,11 @@ test('one profile detects, verifies and compares both controls on a second appli
   const outside = await post({ ...input, activeProfileId: remote.id, url: remote.origin + remote.entryPath });
   assert.equal(outside.status(), 403);
   assert.equal((await outside.json()).code, 'DOMAIN_NOT_VERIFIED');
+  const missing = await post({ ...input, activeProfileId: incomplete.id, url: incomplete.origin + incomplete.entryPath });
+  assert.equal(missing.status(), 202);
+  const missingReport = await completedReport(page, origin, (await missing.json()).id);
+  assert.equal(missingReport.errorCode, 'active_profile_credentials_unavailable');
+  assert.deepEqual(missingReport.activeSecurity.checks.map(check => check.status), ['not_tested', 'not_tested']);
   assert.deepEqual(fixture.requests, []);
 
   await page.getByLabel('Website-URL').fill(url);
@@ -156,8 +192,13 @@ test('one profile detects, verifies and compares both controls on a second appli
     assert.match(check.route, /^GET |^POST /);
     assert.ok(check.expected && check.observed && check.repair && check.reproduction.length);
   }
-  const serialized = JSON.stringify({ capabilities, confirmed });
-  for (const secret of [proof, 'qa-pin-red', 'qa-pin-blue', 'synthetic content']) assert.ok(!serialized.includes(secret));
+  const saved = await readFile(new URL(`../runs/${confirmed.id}/report.json`, import.meta.url), 'utf8');
+  const serialized = JSON.stringify({ capabilities, confirmed, saved, model: model.inputs });
+  assert.equal(model.inputs.length, 1);
+  assert.ok(confirmed.activeSecurity.explanation);
+  for (const secret of [proof, 'qa-pin-red', 'qa-pin-blue', 'synthetic content', ...Object.values(pinVariables)]) {
+    assert.ok(!serialized.includes(secret));
+  }
 
   async function runAgain() {
     const response = await post(input);

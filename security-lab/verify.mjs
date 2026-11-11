@@ -43,6 +43,7 @@ function expectedActive(id, vulnerable) {
       aliceSessionHttpStatus: 201,
       bobSessionHttpStatus: 201,
       distinctSessions: true,
+      crossSessionApplicable: true,
       anonymousHttpStatus: 401,
       aliceOwn: { httpStatus: 200, recordMatched: true },
       bobOwn: { httpStatus: 200, recordMatched: true },
@@ -52,6 +53,7 @@ function expectedActive(id, vulnerable) {
   return {
     status,
     logoutHttpStatus: 204,
+    replayBeforeLogout: { httpStatus: 200, recordMatched: true },
     cookieRemoved: true,
     afterLogout: { httpStatus: 401, recordMatched: false },
     replayCookieStored: true,

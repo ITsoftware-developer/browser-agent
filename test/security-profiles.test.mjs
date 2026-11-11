@@ -3,7 +3,7 @@ import { mkdtemp, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { loadSecurityProfiles, profileRevision, profileSummary, validateSecurityProfiles } from '../security-profiles.mjs';
+import { loadSecurityProfiles, profileRevision, profileSummary, resolveSecurityProfileCredentials, validateSecurityProfiles } from '../security-profiles.mjs';
 
 const secret = 'vertrouwelijke-testwaarde-123456';
 
@@ -144,6 +144,54 @@ test('the revision reflects tested behavior and scope but survives secret rotati
   assert.notEqual(profileRevision(normalize(second)), revision);
 });
 
+test('profiles retain references until each run resolves current credentials without changing metadata', () => {
+  const input = fixture();
+  const { a, b } = input.accounts;
+  delete a.login.body.password;
+  a.login.bodyEnv = { password: 'SECURITY_TEST_USER_A_PASSWORD' };
+  delete b.login.body;
+  b.login.bodyEnv = { username: 'SECURITY_TEST_USER_B_NAME', password: 'SECURITY_TEST_USER_B_PASSWORD' };
+  const profile = normalize(input);
+  assert.deepEqual(profile.accounts.a.login.body, { username: 'fixture-a' });
+  assert.deepEqual(profile.accounts.a.login.bodyEnv, a.login.bodyEnv);
+  assert.deepEqual(profile.accounts.b.login.body, {});
+  const env = {
+    SECURITY_TEST_USER_A_PASSWORD: ' ' + secret + '\\ ",',
+    SECURITY_TEST_USER_B_NAME: 'fixture-b',
+    SECURITY_TEST_USER_B_PASSWORD: secret,
+  };
+  const executable = resolveSecurityProfileCredentials(profile, env);
+  assert.deepEqual(executable.accounts.a.login.body, { username: 'fixture-a', password: env.SECURITY_TEST_USER_A_PASSWORD });
+  assert.deepEqual(executable.accounts.b.login.body, { username: 'fixture-b', password: secret });
+  assert.equal(executable.accounts.a.login.bodyEnv, undefined);
+  env.SECURITY_TEST_USER_A_PASSWORD = 'rotated-' + secret;
+  const rerun = resolveSecurityProfileCredentials(profile, env);
+  assert.equal(rerun.accounts.a.login.body.password, env.SECURITY_TEST_USER_A_PASSWORD);
+  assert.equal(profile.accounts.a.login.body.password, undefined);
+  assert.deepEqual(profileSummary(executable), profileSummary(profile));
+  assert.equal(profileRevision(rerun), profileRevision(profile));
+});
+
+test('invalid login environment references fail closed without exposing values', () => {
+  const input = fixture();
+  const { login } = input.accounts.a;
+  login.bodyEnv = { password: 'SECURITY_TEST_USER_A_PASSWORD' };
+  assert.throws(() => normalize(input), /accounts\.a\.login\.bodyEnv/);
+  delete login.body.password;
+  const safeError = error => /accounts\.a\.login\.body(?:Env)?/.test(error.message) && !error.message.includes(secret);
+  const profile = normalize(input);
+  assert.throws(() => resolveSecurityProfileCredentials(profile, {}), safeError);
+  assert.throws(() => resolveSecurityProfileCredentials(profile, Object.create({ SECURITY_TEST_USER_A_PASSWORD: secret })), safeError);
+  assert.throws(() => resolveSecurityProfileCredentials(profile, { SECURITY_TEST_USER_A_PASSWORD: '' }), safeError);
+  assert.throws(() => resolveSecurityProfileCredentials(profile, { SECURITY_TEST_USER_A_PASSWORD: secret.repeat(400) }), safeError);
+  assert.throws(() => resolveSecurityProfileCredentials(profile, { SECURITY_TEST_USER_A_PASSWORD: 'x'.repeat(4096) }), safeError);
+  login.bodyEnv.password = secret;
+  assert.throws(() => normalize(input), safeError);
+  login.bodyEnv.password = 'SECURITY_TEST_USER_A_PASSWORD';
+  input.accounts.b.login.body.username = 'fixture-a';
+  assert.throws(() => resolveSecurityProfileCredentials(normalize(input), { SECURITY_TEST_USER_A_PASSWORD: secret }), /afzonderlijke inloggegevens/);
+});
+
 test('the optional profile file loads safely and malformed JSON errors remain redacted', async t => {
   assert.deepEqual(await loadSecurityProfiles(), []);
   assert.deepEqual(await loadSecurityProfiles(''), []);
@@ -155,6 +203,13 @@ test('the optional profile file loads safely and malformed JSON errors remain re
     await rmdir(directory);
   });
   assert.deepEqual(await loadSecurityProfiles(file), [normalize(fixture())]);
+  const profile = fixture();
+  delete profile.accounts.a.login.body.password;
+  profile.accounts.a.login.bodyEnv = { password: 'SECURITY_TEST_USER_A_PASSWORD' };
+  await writeFile(file, JSON.stringify([profile]));
+  const [loaded] = await loadSecurityProfiles(file);
+  assert.deepEqual(loaded, normalize(profile));
+  assert.deepEqual(resolveSecurityProfileCredentials(loaded, { SECURITY_TEST_USER_A_PASSWORD: secret }), normalize(fixture()));
   await writeFile(file, '{"password": "' + secret + '"');
   await assert.rejects(loadSecurityProfiles(file), error =>
     /geldige.*JSON/.test(error.message) && !error.message.includes(secret) && !error.message.includes(file));

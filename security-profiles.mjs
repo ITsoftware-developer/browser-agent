@@ -129,15 +129,33 @@ function approvalOf(approval) {
   };
 }
 
+function loginBodyOf(login, field) {
+  if (login.bodyEnv === undefined) return { body: boundedJsonObject(login.body, field + '.body') };
+
+  const body = login.body === undefined ? {} : login.body;
+  if (!isObject(body)) invalid(field + '.body');
+  if (!isObject(login.bodyEnv)) invalid(field + '.bodyEnv');
+  const references = Object.entries(login.bodyEnv);
+  if (!references.length || references.length > 128) invalid(field + '.bodyEnv');
+  const emptyFields = references.map(([key, variable]) => {
+    if (Object.hasOwn(body, key) || typeof variable !== 'string' || !/^[A-Z_][A-Z0-9_]{0,127}$/.test(variable)) {
+      invalid(field + '.bodyEnv');
+    }
+    return [key, ''];
+  });
+  boundedJsonObject({ ...body, ...Object.fromEntries(emptyFields) }, field + '.body');
+  return { body, bodyEnv: { ...login.bodyEnv } };
+}
+
 function accountOf(account, field) {
   checkShape(account, ['label', 'login', 'record'], field);
-  checkShape(account.login, ['path', 'body', 'status'], field + '.login');
+  checkShape(account.login, ['path', 'body', 'bodyEnv', 'status'], field + '.login');
   checkShape(account.record, ['path', 'match'], field + '.record');
   return {
     label: text(account.label, 80, field + '.label'),
     login: {
       path: exactPath(account.login.path, field + '.login.path'),
-      body: boundedJsonObject(account.login.body, field + '.login.body'),
+      ...loginBodyOf(account.login, field + '.login'),
       status: successfulStatus(account.login.status, field + '.login.status'),
     },
     record: {
@@ -179,6 +197,12 @@ function requestsOf(allowedRequests, proof, accounts, session) {
   });
 }
 
+function validateDistinctCredentials(accounts) {
+  if (JSON.stringify(canonical(accounts.a.login.body)) === JSON.stringify(canonical(accounts.b.login.body))) {
+    invalid('de afzonderlijke inloggegevens');
+  }
+}
+
 function validateProfile(profile) {
   checkShape(profile, ['id', 'name', 'origin', 'entryPath', 'approval', 'accounts', 'session', 'authorization', 'allowedRequests'],
     'de profielvelden');
@@ -186,10 +210,11 @@ function validateProfile(profile) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) invalid('id');
   const approval = approvalOf(profile.approval);
   checkShape(profile.accounts, ['a', 'b'], 'accounts');
-  const accounts = { a: accountOf(profile.accounts.a, 'accounts.a'), b: accountOf(profile.accounts.b, 'accounts.b') };
-  if (JSON.stringify(canonical(accounts.a.login.body)) === JSON.stringify(canonical(accounts.b.login.body))) {
-    invalid('de afzonderlijke inloggegevens');
-  }
+  const accounts = {
+    a: accountOf(profile.accounts.a, 'accounts.a'),
+    b: accountOf(profile.accounts.b, 'accounts.b'),
+  };
+  if (!accounts.a.login.bodyEnv && !accounts.b.login.bodyEnv) validateDistinctCredentials(accounts);
   if (accounts.a.record.path === accounts.b.record.path || matchesCanOverlap(accounts.a.record.match, accounts.b.record.match)) {
     invalid('de afzonderlijke recordpaden en onderscheidende recordgegevens');
   }
@@ -238,6 +263,31 @@ export async function loadSecurityProfiles(file) {
   return validateSecurityProfiles(input);
 }
 
+function resolveAccountCredentials(account, field, env) {
+  const { bodyEnv, ...login } = account.login;
+  if (!bodyEnv) return account;
+  const credentials = Object.entries(bodyEnv).map(([key, variable]) => {
+    const value = Object.hasOwn(env, variable) ? env[variable] : undefined;
+    if (typeof value !== 'string' || !value.length || Buffer.byteLength(value) > maxJsonBytes) {
+      invalid(field + '.login.bodyEnv');
+    }
+    return [key, value];
+  });
+  const body = boundedJsonObject({ ...login.body, ...Object.fromEntries(credentials) }, field + '.login.body');
+  return { ...account, login: { ...login, body } };
+}
+
+export function resolveSecurityProfileCredentials(profile, env = process.env) {
+  const { a, b } = profile.accounts;
+  if (!a.login.bodyEnv && !b.login.bodyEnv) return profile;
+  const accounts = {
+    a: resolveAccountCredentials(a, 'accounts.a', env),
+    b: resolveAccountCredentials(b, 'accounts.b', env),
+  };
+  validateDistinctCredentials(accounts);
+  return { ...profile, accounts };
+}
+
 export function profileSummary({ id, name, origin, entryPath }) {
   return { id, name, url: origin + entryPath };
 }
@@ -246,6 +296,7 @@ export function profileRevision(profile) {
   const { origin, entryPath, approval, accounts, session, authorization, allowedRequests } = profile;
   const account = ({ login, record }) => ({ login: { path: login.path, status: login.status }, record });
   const behavior = {
+    probeEvidenceVersion: 2,
     origin,
     entryPath,
     approvalProof: { kind: approval.proof.kind, path: approval.proof.path },

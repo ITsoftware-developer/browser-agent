@@ -17,7 +17,8 @@
         "label": "Testaccount A",
         "login": {
           "path": "/api/session",
-          "body": { "username": "fixture-a", "password": "vervang-dit-wachtwoord" },
+          "body": { "username": "fixture-a" },
+          "bodyEnv": { "password": "SECURITY_TEST_USER_A_PASSWORD" },
           "status": 201
         },
         "record": {
@@ -29,7 +30,8 @@
         "label": "Testaccount B",
         "login": {
           "path": "/api/session",
-          "body": { "username": "fixture-b", "password": "vervang-dit-wachtwoord" },
+          "body": { "username": "fixture-b" },
+          "bodyEnv": { "password": "SECURITY_TEST_USER_B_PASSWORD" },
           "status": 201
         },
         "record": {

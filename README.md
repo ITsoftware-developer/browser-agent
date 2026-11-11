@@ -80,19 +80,27 @@ Het rapport laat de dossieropvragen, afmeldproef en waargenomen cookie-attribute
 
 ## Actieve beveiligingscontrole op je eigen testomgeving
 
-1. Kopieer `examples/security-profile.example.json` naar `security-profiles.local.json`. Pas de origin, profiel-URL, fictieve testaccounts, routes en verwachte uitkomsten aan. Bewaar dit bestand lokaal, want het bevat de inloggegevens van de testaccounts.
+1. Kopieer `examples/security-profile.example.json` naar `security-profiles.local.json`. Pas de origin, profiel-URL, fictieve testaccounts, routes en verwachte uitkomsten aan. Zet vaste velden in `login.body` en verwijs met `login.bodyEnv` vanuit elk geheim JSON-veld naar een omgevingsvariabele. Bij de start van de test leest het voorbeeld de wachtwoorden uit `SECURITY_TEST_USER_A_PASSWORD` en `SECURITY_TEST_USER_B_PASSWORD`.
 2. Leg de toestemming vast met `approval.reference` en een vervaltijd in `approval.expiresAt`. Laat de testapp op `approval.proof.path` HTTP 200 teruggeven met exact de unieke tekst uit `approval.proof.value` als body, zonder afsluitende newline.
 3. Neem de exacte HTTP-methode en het pad van de bewijsroute, beide recordroutes, de loginroutes en de uitlogroute op in `allowedRequests`. De engine gebruikt POST met het opgegeven JSON-object voor login, POST zonder body voor uitloggen en GET voor het bewijs en de fictieve JSON-records. Elk account moet het eigen record kunnen ophalen met HTTP 200. Gebruik onderscheidende velden in `match` om te controleren welk record de browser heeft ontvangen.
 
-Start Browser Agent vanuit de projectmap met het ingestelde profielbestand.
+Start Browser Agent vanuit de projectmap met het ingestelde profielbestand. Zet de variabelen vooraf in de omgeving van het proces of in het lokale `.env`-bestand dat Git negeert.
 
 ```powershell
 $env:ACTIVE_SECURITY_PROFILES_FILE = (Resolve-Path .\security-profiles.local.json).Path
 node server.mjs
 ```
 
-Plak de exacte combinatie van `origin` en `entryPath` in het dashboard. Voor een externe HTTPS-origin moet je ook het DNS TXT-record verifiëren in dezelfde browsersessie. Voor lokale ontwikkeling ondersteunt het profiel een expliciete `http://127.0.0.1:<poort>`-origin zolang strikte DNS-modus uitstaat. Vink **Actieve beveiligingscontrole** en de toestemming aan, en klik op **Start beveiligingscontrole**.
+Gebruik `node --env-file=.env server.mjs` als je de variabelen in `.env` hebt gezet. Ontbrekende of ongeldige waarden stoppen de test voordat de browser verbinding maakt.
+
+Plak de exacte combinatie van `origin` en `entryPath` in het dashboard. Bij actieve controles van een externe HTTPS-origin is DNS TXT-verificatie in dezelfde browsersessie altijd verplicht. Lokale ontwikkeling ondersteunt een expliciete `http://127.0.0.1:<poort>`-origin zolang strikte DNS-modus uitstaat. Vink **Actieve beveiligingscontrole** en de toestemming aan, en klik op **Start beveiligingscontrole**.
 
 De browser gebruikt aparte contexten voor de testaccounts en controleert het bewijs van toestemming voordat hij inlogt. Hij voert uitsluitend de vastgelegde verzoeken uit binnen de tijd- en verzoeklimieten. Rapporten bevatten HTTP-statussen, recordvergelijkingen, cookie-attributen en hersteladvies. Inloggegevens, cookiewaarden en ruwe antwoordteksten blijven buiten het rapport en het taalmodel.
 
-Onder **Beveiligingsgeschiedenis** kun je vanuit dezelfde browsersessie eerdere rapporten openen. Vergelijkingen gebruiken dezelfde profielrevisie, zodat een gewijzigde scope of verwachting geen schijnbare fix oplevert. Bij een onbesliste controle blijft de laatst vastgestelde uitkomst beschikbaar voor een latere vergelijking.
+Onder **Beveiligingsgeschiedenis** kun je vanuit dezelfde browsersessie eerdere rapporten openen. Vergelijkingen gebruiken dezelfde profielrevisie en bewijsmethode. De eerste run met een aangepaste methode vormt een nieuwe meting. Bij een onbesliste controle blijft de laatst vastgestelde uitkomst binnen die revisie beschikbaar voor een latere vergelijking.
+
+### Praktijktest op HTTPS-staging
+
+- Verifieer het exacte HTTPS-origin via **Domeinverificatie** en controleer of een tweede browsersessie zonder die verificatie de test niet kan starten.
+- Controleer of de bewijsroute HTTP 200 geeft via een geldig TLS-certificaat voor de hostnaam. Controleer daarna in het rapport of de testaccounts hun eigen records openen en de browser de sessiecookie met `Secure` en `HttpOnly` opslaat.
+- Laat op een aparte stagingvariant een goedgekeurde route naar een pad buiten de scope verwijzen. Controleer in de toegangslog van staging of Browser Agent de doelroute overslaat en bekijk de uitkomst van die controle in het rapport.

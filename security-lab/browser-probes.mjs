@@ -198,6 +198,17 @@ async function login(probe, login, recordUrl, cookieName) {
   return { httpStatus, ...await cookieObservation(probe, recordUrl, cookieName) };
 }
 
+async function uniqueSessionCookie(probe, recordUrl, cookieName) {
+  const candidates = (await probe.context.cookies(recordUrl)).filter(cookie => cookie.name === cookieName);
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+async function restoreCookie(probe, original, recordUrl, cookieName) {
+  if (original) await probe.context.addCookies([original]).catch(() => {});
+  const { cookie, flags } = await cookieObservation(probe, recordUrl, cookieName);
+  return { stored: Boolean(original && cookie?.value === original.value), flags };
+}
+
 async function readRecord(probe, path, expected) {
   const { httpStatus, recordMatched } = await probeFetch(probe, path, { expected });
   return { httpStatus, recordMatched };
@@ -247,11 +258,15 @@ export async function runActiveSecurity(profile, { pinnedAddress } = {}) {
     const bob = await login(bobProbe, b.login, bobUrl, cookieName);
     const aliceOwn = alice.cookie ? await readRecord(aliceProbe, alicePath, a.record.match) : missingRecord;
     const bobOwn = bob.cookie ? await readRecord(bobProbe, bobPath, b.record.match) : missingRecord;
-    const cross = bob.cookie ? await readRecord(bobProbe, alicePath, a.record.match) : missingRecord;
-    const distinctSessions = Boolean(alice.cookie && bob.cookie && alice.cookie.value !== bob.cookie.value);
+    const originalCookie = await uniqueSessionCookie(aliceProbe, aliceUrl, cookieName);
+    const bobOwnCookie = await uniqueSessionCookie(bobProbe, bobUrl, cookieName);
+    const bobCrossCookie = await uniqueSessionCookie(bobProbe, aliceUrl, cookieName);
+    const crossSessionApplicable = Boolean(bobOwnCookie && bobCrossCookie?.value === bobOwnCookie.value);
+    const cross = crossSessionApplicable ? await readRecord(bobProbe, alicePath, a.record.match) : missingRecord;
+    const distinctSessions = Boolean(originalCookie && bobOwnCookie && originalCookie.value !== bobOwnCookie.value);
     let accessStatus = 'inconclusive';
     if (alice.httpStatus === a.login.status && bob.httpStatus === b.login.status && distinctSessions &&
-      deniedRecord(anonymous, anonymousStatus) &&
+      deniedRecord(anonymous, anonymousStatus) && crossSessionApplicable &&
       validRecord(aliceOwn) && validRecord(bobOwn)) {
       if (validRecord(cross)) accessStatus = 'confirmed';
       else if (deniedRecord(cross, deniedStatus)) accessStatus = 'protected';
@@ -270,32 +285,44 @@ export async function runActiveSecurity(profile, { pinnedAddress } = {}) {
       status: accessStatus,
       expected: {
         aliceSessionHttpStatus: a.login.status, bobSessionHttpStatus: b.login.status, distinctSessions: true,
+        crossSessionApplicable: true,
         anonymousHttpStatus: anonymousStatus, aliceOwn: { httpStatus: 200, recordMatched: true },
         bobOwn: { httpStatus: 200, recordMatched: true }, cross: { httpStatus: deniedStatus, recordMatched: false },
       },
       observed: {
         aliceSessionHttpStatus: alice.httpStatus, bobSessionHttpStatus: bob.httpStatus, distinctSessions,
+        crossSessionApplicable,
         anonymousHttpStatus: anonymous.httpStatus, aliceOwn, bobOwn, cross,
       },
       repair: 'Controleer op de server bij iedere opvraag of het aangemelde account toegang heeft tot het gevraagde record.',
     });
 
-    const logout = alice.cookie && alice.httpStatus === a.login.status && validRecord(aliceOwn)
+    const canLogout = originalCookie && alice.httpStatus === a.login.status && validRecord(aliceOwn);
+    let replayBeforeLogout = missingRecord;
+    if (canLogout) {
+      const baselineProbe = await browserProbe(browser, scope, alicePath);
+      try {
+        const baseline = await restoreCookie(baselineProbe, originalCookie, aliceUrl, cookieName);
+        if (baseline.stored) replayBeforeLogout = await readRecord(baselineProbe, alicePath, a.record.match);
+      } finally {
+        await baselineProbe.context.close();
+      }
+    }
+    const logout = canLogout
       ? await probeFetch(aliceProbe, logoutPath, { method: 'POST' }) : missingRecord;
     const afterLogout = await cookieObservation(aliceProbe, aliceUrl, cookieName);
-    const cookieRemoved = Boolean(alice.cookie && !afterLogout.cookie);
+    const cookieRemoved = Boolean(originalCookie && !afterLogout.cookie);
     const afterLogoutRead = logout.httpStatus === logoutStatus
       ? await readRecord(aliceProbe, alicePath, a.record.match) : missingRecord;
     const replayProbe = await browserProbe(browser, scope, alicePath);
-    if (alice.cookie && logout.httpStatus === logoutStatus) {
-      // Keep the original fictitious cookie only in memory. Chromium decides whether to send it.
-      await replayProbe.context.addCookies([alice.cookie]).catch(() => {});
-    }
-    const replayState = await cookieObservation(replayProbe, aliceUrl, cookieName);
-    const replayCookieStored = Boolean(alice.cookie && replayState.cookie?.value === alice.cookie.value);
+    // Keep the original fictitious cookie only in memory. Chromium decides whether to send it.
+    const replayState = await restoreCookie(replayProbe, logout.httpStatus === logoutStatus ? originalCookie : undefined,
+      aliceUrl, cookieName);
+    const replayCookieStored = replayState.stored;
     const replay = replayCookieStored ? await readRecord(replayProbe, alicePath, a.record.match) : missingRecord;
     let replayStatus = 'inconclusive';
-    if (alice.httpStatus === a.login.status && validRecord(aliceOwn) && logout.httpStatus === logoutStatus && cookieRemoved &&
+    if (alice.httpStatus === a.login.status && validRecord(aliceOwn) && validRecord(replayBeforeLogout) &&
+      logout.httpStatus === logoutStatus && cookieRemoved &&
       deniedRecord(afterLogoutRead, anonymousStatus) && replayCookieStored) {
       if (validRecord(replay)) replayStatus = 'confirmed';
       else if (deniedRecord(replay, anonymousStatus)) replayStatus = 'protected';
@@ -307,17 +334,20 @@ export async function runActiveSecurity(profile, { pinnedAddress } = {}) {
       route: `POST ${logoutPath}`,
       reproduction: [
         `Maak een sessie voor het eerste account via POST ${a.login.path} en bevestig toegang via GET ${alicePath}.`,
+        `Controleer vóór afmelden of alleen de oorspronkelijke sessiecookie in een aparte context toegang geeft tot GET ${alicePath}.`,
         `Voer POST ${logoutPath} uit en controleer of Chromium de sessiecookie verwijdert.`,
         `Plaats de oorspronkelijke fictieve cookie in een aparte browsercontext en voer GET ${alicePath} uit.`,
       ],
       status: replayStatus,
       expected: {
         aliceSessionHttpStatus: a.login.status, before: { httpStatus: 200, recordMatched: true }, logoutHttpStatus: logoutStatus,
+        replayBeforeLogout: { httpStatus: 200, recordMatched: true },
         cookieRemoved: true, afterLogout: { httpStatus: anonymousStatus, recordMatched: false }, replayCookieStored: true,
         replay: { httpStatus: anonymousStatus, recordMatched: false },
       },
       observed: {
         aliceSessionHttpStatus: alice.httpStatus, before: aliceOwn, logoutHttpStatus: logout.httpStatus,
+        replayBeforeLogout,
         cookieRemoved, afterLogout: afterLogoutRead, replayCookieStored, replay,
       },
       repair: 'Trek de sessie op de server in bij uitloggen en controleer bij volgende verzoeken of de sessie nog geldig is.',
